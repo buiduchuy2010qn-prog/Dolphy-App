@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
@@ -35,6 +37,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 data class OtaRelease(
     val tag: String,
@@ -43,6 +46,7 @@ data class OtaRelease(
     val apkUrl: String,
     val apkName: String,
     val apkSize: Long,
+    val assetId: Long = 0L,
 )
 
 sealed class OtaState {
@@ -50,7 +54,12 @@ sealed class OtaState {
     data object Checking : OtaState()
     data class UpToDate(val current: String) : OtaState()
     data class Available(val current: String, val release: OtaRelease) : OtaState()
-    data class Downloading(val release: OtaRelease, val progress: Float) : OtaState()
+    data class Downloading(
+        val release: OtaRelease,
+        val progress: Float,
+        val readBytes: Long = 0L,
+        val totalBytes: Long = 0L
+    ) : OtaState()
     data class ReadyToInstall(val release: OtaRelease, val file: File) : OtaState()
     data class Error(val message: String) : OtaState()
 }
@@ -60,7 +69,7 @@ object OtaController {
     private const val API = "https://api.github.com/repos/$OWNER_REPO/releases/latest"
     private const val PREFS = "DolphyPrefs"
     private const val LAST_CHECK = "ota_last_check_ms"
-    private const val AUTO_INTERVAL_MS = 12L * 60 * 60 * 1000
+    private const val AUTO_INTERVAL_MS = 60L * 1000L // Check on startup (1-minute cooldown)
     private const val UA = "Dolphy-VN-OTA"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -114,13 +123,14 @@ object OtaController {
     fun download(context: Context, release: OtaRelease) {
         if (_state.value is OtaState.Downloading) return
         scope.launch {
-            _state.value = OtaState.Downloading(release, 0f)
+            _state.value = OtaState.Downloading(release, 0f, 0L, release.apkSize)
             runCatching {
                 val dir = File(context.cacheDir, "ota").apply { mkdirs() }
                 val dest = File(dir, release.apkName.ifBlank { "Dolphy-VN-update.apk" })
                 downloadFile(release.apkUrl, dest) { read, total ->
-                    val p = if (total > 0) (read.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
-                    _state.value = OtaState.Downloading(release, p)
+                    val effectiveTotal = if (total > 0) total else release.apkSize
+                    val p = if (effectiveTotal > 0) (read.toFloat() / effectiveTotal.toFloat()).coerceIn(0f, 1f) else 0f
+                    _state.value = OtaState.Downloading(release, p, read, effectiveTotal)
                 }
                 dest
             }.onSuccess { file ->
@@ -195,6 +205,7 @@ object OtaController {
         var apkUrl = ""
         var apkName = "Dolphy-VN-update.apk"
         var apkSize = 0L
+        var assetId = 0L
         for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
             val name = asset.optString("name")
@@ -202,6 +213,7 @@ object OtaController {
                 apkUrl = asset.optString("browser_download_url")
                 apkName = name
                 apkSize = asset.optLong("size")
+                assetId = asset.optLong("id")
                 if (name.contains("Dolphy-VN", ignoreCase = true)) break
             }
         }
@@ -213,6 +225,7 @@ object OtaController {
             apkUrl = apkUrl,
             apkName = apkName,
             apkSize = apkSize,
+            assetId = assetId,
         )
     }
 
@@ -275,39 +288,52 @@ fun OtaUpdateHost(isVi: Boolean) {
 
     when (val s = state) {
         is OtaState.Available -> OtaDialog(
-            title = if (isVi) "Có bản cập nhật mới" else "Update available",
+            title = if (isVi) "🚀 Có bản cập nhật mới (${s.release.tag})" else "🚀 Update available (${s.release.tag})",
             body = buildString {
-                append(if (isVi) "Hiện tại: " else "Current: ")
+                append(if (isVi) "Phiên bản hiện tại: " else "Current version: ")
                 append(s.current)
                 append('\n')
-                append(if (isVi) "Bản mới: " else "Latest: ")
+                append(if (isVi) "Phiên bản mới: " else "Latest version: ")
                 append(s.release.title.ifBlank { s.release.tag })
+                if (s.release.apkSize > 0) {
+                    val sizeMb = s.release.apkSize / (1024.0 * 1024.0)
+                    append(String.format(Locale.US, " (%.1f MB)", sizeMb))
+                }
                 if (s.release.notes.isNotBlank()) {
                     append("\n\n")
                     append(s.release.notes.take(900))
                 }
             },
-            confirm = if (isVi) "Tải và cài" else "Download & install",
+            confirm = if (isVi) "Tải & Cài đè ngay" else "Download & Install",
             dismiss = if (isVi) "Để sau" else "Later",
             onConfirm = { OtaController.download(context, s.release) },
             onDismiss = { OtaController.dismiss() },
         )
-        is OtaState.Downloading -> OtaDialog(
-            title = if (isVi) "Đang tải bản cập nhật" else "Downloading update",
-            body = s.release.title,
-            confirm = null,
-            dismiss = null,
-            progress = s.progress,
-            onConfirm = {},
-            onDismiss = {},
-        )
+        is OtaState.Downloading -> {
+            val readMb = s.readBytes / (1024.0 * 1024.0)
+            val totalMb = s.totalBytes / (1024.0 * 1024.0)
+            val detail = if (s.totalBytes > 0) {
+                String.format(Locale.US, "%.1f MB / %.1f MB (%d%%)", readMb, totalMb, (s.progress * 100).toInt())
+            } else {
+                "${(s.progress * 100).toInt()}%"
+            }
+            OtaDialog(
+                title = if (isVi) "⏳ Đang tải bản cập nhật OTA..." else "⏳ Downloading OTA update...",
+                body = "${s.release.title}\n$detail",
+                confirm = null,
+                dismiss = null,
+                progress = s.progress,
+                onConfirm = {},
+                onDismiss = {},
+            )
+        }
         is OtaState.ReadyToInstall -> OtaDialog(
-            title = if (isVi) "Sẵn sàng cài đặt" else "Ready to install",
+            title = if (isVi) "✅ Đã tải xong — Sẵn sàng cài đè" else "✅ Ready to install",
             body = if (isVi)
-                "File APK đã tải xong. Nếu hệ thống hỏi, hãy cho phép cài từ nguồn này."
+                "Gói cập nhật ${s.release.tag} đã tải xong. Bấm «Cài đặt ngay» để cập nhật trực tiếp (không mất dữ liệu)."
             else
-                "APK downloaded. Allow installs from this source if Android asks.",
-            confirm = if (isVi) "Cài đặt" else "Install",
+                "APK ${s.release.tag} downloaded. Tap 'Install Now' to update.",
+            confirm = if (isVi) "Cài đặt ngay" else "Install Now",
             dismiss = if (isVi) "Đóng" else "Close",
             onConfirm = { OtaController.installApk(context, s.file) },
             onDismiss = { OtaController.dismiss() },
@@ -336,27 +362,26 @@ private fun OtaDialog(
 ) {
     AlertDialog(
         onDismissRequest = { if (dismiss != null) onDismiss() },
-        title = { Text(title) },
+        title = { Text(title, fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(body)
+                Text(body, style = MaterialTheme.typography.bodyMedium)
                 if (progress != null) {
                     LinearProgressIndicator(
                         progress = { progress },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Text("${(progress * 100).toInt()}%")
                 }
             }
         },
         confirmButton = {
             if (confirm != null) {
-                TextButton(onClick = onConfirm) { Text(confirm) }
+                TextButton(onClick = onConfirm) { Text(confirm, fontWeight = FontWeight.Bold) }
             }
         },
         dismissButton = {

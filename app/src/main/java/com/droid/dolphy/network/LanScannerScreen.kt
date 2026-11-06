@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -56,6 +57,8 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -75,7 +78,7 @@ data class LanDevice(
     val customAlias: String? = null
 )
 
-private val portServiceNames = mapOf(
+internal val portServiceNames = mapOf(
     21 to "FTP",
     22 to "SSH",
     23 to "Telnet",
@@ -88,7 +91,7 @@ private val portServiceNames = mapOf(
     554 to "RTSP Cam",
     1883 to "MQTT IoT",
     3389 to "RDP",
-    5000 to "UPnP/NAS",
+    5000 to "UPnP/AirPlay",
     5353 to "mDNS",
     5555 to "ADB",
     7000 to "AirPlay",
@@ -103,7 +106,7 @@ private val portServiceNames = mapOf(
     62078 to "iOS Sync"
 )
 
-private val ouiVendors = mapOf(
+internal val ouiVendors = mapOf(
     "00:00:0C" to "Cisco", "00:01:42" to "Google", "00:04:20" to "Intel",
     "00:05:5D" to "Avaya", "00:06:5B" to "Samsung", "00:09:0F" to "Harman",
     "00:0A:27" to "TCL", "00:0C:29" to "VMware", "00:0E:07" to "TP-Link",
@@ -260,6 +263,135 @@ private val ouiVendors = mapOf(
     "DC:A6:32" to "Raspberry Pi", "B8:27:EB" to "Raspberry Pi", "E4:5F:01" to "Raspberry Pi"
 )
 
+internal fun lookupBrandByMac(mac: String?): String? {
+    if (mac == null) return null
+    val normalized = mac.uppercase(Locale.US).replace("-", ":")
+    val prefix8 = normalized.take(8)
+    return ouiVendors[prefix8]
+}
+
+internal fun detectBrandByHttp(ip: String, openPorts: List<Int>): String? {
+    val portsToCheck = if (80 in openPorts) listOf(80)
+    else if (443 in openPorts) listOf(443)
+    else listOf(80, 443, 8080, 8008)
+
+    for (port in portsToCheck) {
+        try {
+            val url = URL("http://$ip:$port/")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 800
+            connection.readTimeout = 800
+            connection.instanceFollowRedirects = false
+            val server = connection.getHeaderField("Server") ?: ""
+            val wwwAuth = connection.getHeaderField("WWW-Authenticate") ?: ""
+            connection.disconnect()
+
+            val combined = "$server $wwwAuth"
+            val detected = when {
+                combined.contains("Viettel", ignoreCase = true) -> "Viettel"
+                combined.contains("VNPT", ignoreCase = true) || combined.contains("iGate", ignoreCase = true) -> "VNPT iGate"
+                combined.contains("FPT", ignoreCase = true) -> "FPT Telecom"
+                combined.contains("TP-Link", ignoreCase = true) || server.contains("TP-LINK", ignoreCase = true) -> "TP-Link"
+                combined.contains("Mercusys", ignoreCase = true) -> "Mercusys"
+                combined.contains("Huawei", ignoreCase = true) -> "Huawei"
+                combined.contains("D-Link", ignoreCase = true) -> "D-Link"
+                combined.contains("Netgear", ignoreCase = true) -> "Netgear"
+                combined.contains("Asus", ignoreCase = true) -> "Asus"
+                combined.contains("Linksys", ignoreCase = true) -> "Linksys"
+                combined.contains("Cisco", ignoreCase = true) -> "Cisco"
+                combined.contains("ZTE", ignoreCase = true) -> "ZTE"
+                combined.contains("MikroTik", ignoreCase = true) -> "MikroTik"
+                combined.contains("Ubiquiti", ignoreCase = true) -> "Ubiquiti"
+                combined.contains("Ruijie", ignoreCase = true) -> "Ruijie"
+                combined.contains("Synology", ignoreCase = true) -> "Synology"
+                combined.contains("QNAP", ignoreCase = true) -> "QNAP"
+                combined.contains("Hikvision", ignoreCase = true) || combined.contains("EZVIZ", ignoreCase = true) -> "Hikvision / Ezviz"
+                combined.contains("Dahua", ignoreCase = true) || combined.contains("Imou", ignoreCase = true) -> "Dahua / Imou"
+                combined.contains("Axis", ignoreCase = true) -> "Axis"
+                combined.contains("Panasonic", ignoreCase = true) -> "Panasonic"
+                combined.contains("Sony", ignoreCase = true) -> "Sony"
+                combined.contains("Samsung", ignoreCase = true) -> "Samsung"
+                combined.contains("LG", ignoreCase = true) -> "LG"
+                combined.contains("Apple", ignoreCase = true) -> "Apple"
+                combined.contains("HP", ignoreCase = true) -> "HP"
+                combined.contains("Canon", ignoreCase = true) -> "Canon"
+                combined.contains("Epson", ignoreCase = true) -> "Epson"
+                combined.contains("Brother", ignoreCase = true) -> "Brother"
+                combined.contains("Xiaomi", ignoreCase = true) -> "Xiaomi"
+                combined.contains("Tenda", ignoreCase = true) -> "Tenda"
+                combined.contains("Mercury", ignoreCase = true) -> "Mercury"
+                combined.contains("Totolink", ignoreCase = true) -> "Totolink"
+                else -> null
+            }
+            if (detected != null) return detected
+        } catch (_: Exception) { continue }
+    }
+    return null
+}
+
+/**
+ * Returns the accurate Wi-Fi LAN IPv4 address (never picking 4G LTE rmnet/ccmni/tun interfaces when both Wi-Fi and Mobile Data are on!).
+ */
+fun getAccurateWifiIpv4(context: Context): String? {
+    try {
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val ipInt = wm?.dhcpInfo?.ipAddress ?: 0
+        if (ipInt != 0) {
+            val bytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(ipInt).array()
+            val dhcpIp = InetAddress.getByAddress(bytes).hostAddress
+            if (!dhcpIp.isNullOrBlank() && dhcpIp != "0.0.0.0") return dhcpIp
+        }
+    } catch (_: Exception) {}
+
+    try {
+        val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+        // Pass 1: Explicitly prefer wlan* / ap* / wifi* interfaces
+        for (intf in interfaces) {
+            if (!intf.isUp || intf.isLoopback) continue
+            val name = intf.name.lowercase(Locale.US)
+            if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("wifi") || name.startsWith("eth")) {
+                for (addr in Collections.list(intf.inetAddresses)) {
+                    if (addr.isLoopbackAddress) continue
+                    val host = addr.hostAddress ?: continue
+                    if (!host.contains(':')) return host
+                }
+            }
+        }
+        // Pass 2: Any non-cellular, non-VPN IPv4 interface
+        for (intf in interfaces) {
+            if (!intf.isUp || intf.isLoopback) continue
+            val name = intf.name.lowercase(Locale.US)
+            if (name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp") ||
+                name.startsWith("tun") || name.startsWith("ppp") || name.startsWith("dummy")) continue
+            for (addr in Collections.list(intf.inetAddresses)) {
+                if (addr.isLoopbackAddress) continue
+                val host = addr.hostAddress ?: continue
+                if (!host.contains(':')) return host
+            }
+        }
+    } catch (_: Exception) {}
+    return null
+}
+
+/**
+ * Sends a fast UDP ARP-warmup burst across the subnet so that sleeping phones respond to Layer-2 ARP and populate `ip neigh`!
+ */
+fun warmupSubnetArpTable(subnet: String) {
+    try {
+        DatagramSocket().use { socket ->
+            socket.soTimeout = 10
+            val probe = byteArrayOf(0x00)
+            for (i in 1..254) {
+                runCatching {
+                    val addr = InetAddress.getByName("$subnet.$i")
+                    socket.send(DatagramPacket(probe, probe.size, addr, 5353))
+                    if (i % 2 == 0) socket.send(DatagramPacket(probe, probe.size, addr, 137))
+                }
+            }
+        }
+    } catch (_: Exception) {}
+}
+
 fun isLocallyAdministeredMac(mac: String?): Boolean {
     if (mac == null || mac.length < 2) return false
     val secondChar = mac[1].uppercaseChar()
@@ -294,7 +426,7 @@ fun saveDeviceAlias(context: Context, ip: String, mac: String?, alias: String) {
  * Sends a standard DNS PTR reverse query (`d.c.b.a.in-addr.arpa`) to a specific DNS server (e.g., Router Gateway port 53 or mDNS port 5353).
  * This bypasses Android's 8.8.8.8 / Private DNS so the home router's dnsmasq can return the real DHCP client hostname!
  */
-fun queryDnsPtrName(targetIp: String, dnsServerIp: String, dnsPort: Int = 53, timeoutMs: Int = 420): String? {
+fun queryDnsPtrName(targetIp: String, dnsServerIp: String, dnsPort: Int = 53, timeoutMs: Int = 450): String? {
     val octets = targetIp.split(".")
     if (octets.size != 4) return null
     val ptrDomain = "${octets[3]}.${octets[2]}.${octets[1]}.${octets[0]}.in-addr.arpa"
@@ -376,6 +508,7 @@ private fun parseDnsPtrResponse(buf: ByteArray, length: Int): String? {
                     .removeSuffix(".local")
                     .removeSuffix(".lan")
                     .removeSuffix(".home")
+                    .removeSuffix(".home.arpa")
                     .removeSuffix(".localdomain")
                     .removeSuffix(".dhcp")
                     .trim()
@@ -500,8 +633,17 @@ fun fetchUpnpFriendlyName(locationUrl: String?, serverHeader: String?): String? 
     return null
 }
 
+private val appleModelMap = mapOf(
+    "iPhone12,1" to "iPhone 11", "iPhone12,3" to "iPhone 11 Pro", "iPhone12,5" to "iPhone 11 Pro Max",
+    "iPhone13,2" to "iPhone 12", "iPhone13,3" to "iPhone 12 Pro", "iPhone13,4" to "iPhone 12 Pro Max",
+    "iPhone14,5" to "iPhone 13", "iPhone14,2" to "iPhone 13 Pro", "iPhone14,3" to "iPhone 13 Pro Max",
+    "iPhone14,7" to "iPhone 14", "iPhone14,8" to "iPhone 14 Plus", "iPhone15,2" to "iPhone 14 Pro", "iPhone15,3" to "iPhone 14 Pro Max",
+    "iPhone15,4" to "iPhone 15", "iPhone15,5" to "iPhone 15 Plus", "iPhone16,1" to "iPhone 15 Pro", "iPhone16,2" to "iPhone 15 Pro Max",
+    "iPhone17,3" to "iPhone 16", "iPhone17,4" to "iPhone 16 Plus", "iPhone17,1" to "iPhone 16 Pro", "iPhone17,2" to "iPhone 16 Pro Max"
+)
+
 /**
- * Fetches Google Cast / Android TV device name (`/setup/eureka_info`) or Web HTML `<title>`.
+ * Fetches Google Cast (`/setup/eureka_info`), Apple AirPlay (`/info`), or Web HTML `<title>`.
  */
 fun fetchHttpOrCastDeviceName(ip: String, openPorts: List<Int>): String? {
     // 1. Check Google Cast / Smart TV Eureka JSON on port 8008
@@ -517,7 +659,31 @@ fun fetchHttpOrCastDeviceName(ip: String, openPorts: List<Int>): String? {
         } catch (_: Exception) {}
     }
 
-    // 2. Check HTML <title> on HTTP ports
+    // 2. Check Apple AirPlay /info on port 7000 or 5000
+    for (apPort in listOf(7000, 5000).filter { it in openPorts }) {
+        try {
+            val conn = URL("http://$ip:$apPort/info").openConnection() as HttpURLConnection
+            conn.connectTimeout = 700
+            conn.readTimeout = 700
+            val body = conn.inputStream.bufferedReader().use { reader ->
+                val buf = CharArray(4096)
+                val read = reader.read(buf)
+                if (read > 0) String(buf, 0, read) else ""
+            }
+            conn.disconnect()
+            val nameMatch = Regex("(?i)<key>name</key>\\s*<string>([^<]+)</string>").find(body)?.groupValues?.get(1)?.trim()
+            val modelMatch = Regex("(?i)<key>model</key>\\s*<string>([^<]+)</string>").find(body)?.groupValues?.get(1)?.trim()
+            val friendlyModel = modelMatch?.let { appleModelMap[it] ?: it }
+            if (!nameMatch.isNullOrBlank()) {
+                return if (!friendlyModel.isNullOrBlank() && !nameMatch.contains(friendlyModel, ignoreCase = true)) {
+                    "$nameMatch ($friendlyModel)"
+                } else nameMatch
+            }
+            if (!friendlyModel.isNullOrBlank()) return friendlyModel
+        } catch (_: Exception) {}
+    }
+
+    // 3. Check HTML <title> on HTTP ports
     val webPorts = listOf(80, 8080, 8888).filter { it in openPorts }
     for (p in webPorts) {
         try {
@@ -588,6 +754,89 @@ fun buildSmartFallbackDeviceName(
         isLocallyAdministeredMac(mac) -> if (isVi) "Điện thoại (MAC ẩn danh • Máy .$lastOctet)" else "Phone (Private MAC • .$lastOctet)"
         else -> "$typeLabel (Máy số .$lastOctet)"
     }
+}
+
+/**
+ * Unified 9-Layer Device Identity Resolution used by both LanScannerScreen and NetworkDiagnosticHubScreen ("Chọn thiết bị trong LAN").
+ */
+internal fun resolveFullLanIdentity(
+    context: Context,
+    ip: String,
+    gatewayIp: String?,
+    dnsServers: List<String>,
+    initialMac: String?,
+    openPorts: List<Int>,
+    nsdName: String?,
+    ssdpPair: Pair<String?, String?>?,
+    isVi: Boolean
+): LanDevice {
+    var mac = initialMac ?: readSystemNeighborTable()[ip]
+    val (nbName, nbMac) = queryNetBiosNameAndMac(ip, 380)
+    if (mac == null && nbMac != null) mac = nbMac
+
+    val upnpFriendly = if (ssdpPair != null) fetchUpnpFriendlyName(ssdpPair.first, ssdpPair.second) else null
+
+    var realName: String? = nsdName
+        ?: nbName
+        ?: upnpFriendly
+
+    // Try Router Gateway DNS PTR & DHCP DNS servers (where router dnsmasq stores DHCP client Option 12 Hostnames!)
+    if (realName.isNullOrBlank()) {
+        val dnsList = (listOfNotNull(gatewayIp) + dnsServers).distinct()
+        for (dnsIp in dnsList) {
+            val ptr = queryDnsPtrName(ip, dnsIp, 53, 450)
+            if (!ptr.isNullOrBlank()) {
+                realName = ptr
+                break
+            }
+        }
+    }
+
+    // Try Direct Unicast mDNS PTR (port 5353)
+    if (realName.isNullOrBlank()) {
+        realName = queryDnsPtrName(ip, ip, 5353, 400)
+    }
+
+    // Try Cast / AirPlay / HTTP Title
+    if (realName.isNullOrBlank() && openPorts.isNotEmpty()) {
+        realName = fetchHttpOrCastDeviceName(ip, openPorts)
+    }
+
+    // Try standard canonicalHostName if not raw IP
+    if (realName.isNullOrBlank()) {
+        try {
+            val canonical = InetAddress.getByName(ip).canonicalHostName
+            if (canonical != ip && !canonical.matches(Regex("\\d+\\.\\d+\\.\\d+\\.\\d+"))) {
+                realName = canonical.removeSuffix(".lan").removeSuffix(".local").removeSuffix(".home").removeSuffix(".home.arpa")
+            }
+        } catch (_: Exception) {}
+    }
+
+    val brand = lookupBrandByMac(mac) ?: detectBrandByHttp(ip, openPorts)
+    val isFirstIp = ip == gatewayIp || ip.endsWith(".1")
+    val type = guessLanDeviceType(realName ?: brand, ip, openPorts, isFirstIp)
+
+    val displayHostname = if (!realName.isNullOrBlank()) {
+        if (!brand.isNullOrBlank() && !realName.contains(brand, ignoreCase = true) && realName.length <= 22) {
+            "$realName ($brand)"
+        } else {
+            realName
+        }
+    } else {
+        buildSmartFallbackDeviceName(ip, type, brand, mac, openPorts, isVi)
+    }
+
+    val savedAlias = getSavedDeviceAlias(context, ip, mac)
+    return LanDevice(
+        ip = ip,
+        hostname = displayHostname,
+        mac = mac,
+        type = type,
+        openPorts = openPorts,
+        isUPnP = ssdpPair != null,
+        brand = brand,
+        customAlias = savedAlias
+    )
 }
 
 fun readSystemNeighborTable(): Map<String, String> {
@@ -679,76 +928,6 @@ fun LanScannerScreen(navController: NavController) {
 
     val youLabel = stringResource(R.string.lan_scanner_you)
 
-    fun getMacFromArp(ip: String): String? {
-        return readSystemNeighborTable()[ip]
-    }
-
-    fun lookupBrand(mac: String?): String? {
-        if (mac == null) return null
-        val normalized = mac.uppercase().replace("-", ":")
-        val prefix8 = normalized.take(8)
-        if (ouiVendors.containsKey(prefix8)) return ouiVendors[prefix8]
-        return null
-    }
-
-    fun detectBrandHttp(ip: String, openPorts: List<Int>): String? {
-        val portsToCheck = if (80 in openPorts) listOf(80)
-        else if (443 in openPorts) listOf(443)
-        else listOf(80, 443, 8080, 8008)
-
-        for (port in portsToCheck) {
-            try {
-                val url = URL("http://$ip:$port/")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = 900
-                connection.readTimeout = 900
-                connection.instanceFollowRedirects = false
-                val server = connection.getHeaderField("Server") ?: ""
-                val wwwAuth = connection.getHeaderField("WWW-Authenticate") ?: ""
-                connection.disconnect()
-
-                val combined = "$server $wwwAuth"
-                return when {
-                    combined.contains("Viettel", ignoreCase = true) -> "Viettel"
-                    combined.contains("VNPT", ignoreCase = true) || combined.contains("iGate", ignoreCase = true) -> "VNPT iGate"
-                    combined.contains("FPT", ignoreCase = true) -> "FPT Telecom"
-                    combined.contains("TP-Link", ignoreCase = true) || server.contains("TP-LINK", ignoreCase = true) -> "TP-Link"
-                    combined.contains("Mercusys", ignoreCase = true) -> "Mercusys"
-                    combined.contains("Huawei", ignoreCase = true) -> "Huawei"
-                    combined.contains("D-Link", ignoreCase = true) -> "D-Link"
-                    combined.contains("Netgear", ignoreCase = true) -> "Netgear"
-                    combined.contains("Asus", ignoreCase = true) -> "Asus"
-                    combined.contains("Linksys", ignoreCase = true) -> "Linksys"
-                    combined.contains("Cisco", ignoreCase = true) -> "Cisco"
-                    combined.contains("ZTE", ignoreCase = true) -> "ZTE"
-                    combined.contains("MikroTik", ignoreCase = true) -> "MikroTik"
-                    combined.contains("Ubiquiti", ignoreCase = true) -> "Ubiquiti"
-                    combined.contains("Ruijie", ignoreCase = true) -> "Ruijie"
-                    combined.contains("Synology", ignoreCase = true) -> "Synology"
-                    combined.contains("QNAP", ignoreCase = true) -> "QNAP"
-                    combined.contains("Hikvision", ignoreCase = true) || combined.contains("EZVIZ", ignoreCase = true) -> "Hikvision / Ezviz"
-                    combined.contains("Dahua", ignoreCase = true) || combined.contains("Imou", ignoreCase = true) -> "Dahua / Imou"
-                    combined.contains("Axis", ignoreCase = true) -> "Axis"
-                    combined.contains("Panasonic", ignoreCase = true) -> "Panasonic"
-                    combined.contains("Sony", ignoreCase = true) -> "Sony"
-                    combined.contains("Samsung", ignoreCase = true) -> "Samsung"
-                    combined.contains("LG", ignoreCase = true) -> "LG"
-                    combined.contains("Apple", ignoreCase = true) -> "Apple"
-                    combined.contains("HP", ignoreCase = true) -> "HP"
-                    combined.contains("Canon", ignoreCase = true) -> "Canon"
-                    combined.contains("Epson", ignoreCase = true) -> "Epson"
-                    combined.contains("Brother", ignoreCase = true) -> "Brother"
-                    combined.contains("Xiaomi", ignoreCase = true) -> "Xiaomi"
-                    combined.contains("Tenda", ignoreCase = true) -> "Tenda"
-                    combined.contains("Mercury", ignoreCase = true) -> "Mercury"
-                    combined.contains("Totolink", ignoreCase = true) -> "Totolink"
-                    else -> null
-                }
-            } catch (e: Exception) { continue }
-        }
-        return null
-    }
-
     fun startScan() {
         if (isScanning) return
         isScanning = true
@@ -758,14 +937,13 @@ fun LanScannerScreen(navController: NavController) {
         upnpLocations.clear()
 
         scope.launch(Dispatchers.IO) {
-            val localIp = getLocalIpAddress()
-            if (localIp == null) {
+            val selfIp = getAccurateWifiIpv4(context)
+            if (selfIp == null) {
                 withContext(Dispatchers.Main) { isScanning = false }
                 return@launch
             }
 
-            val selfIp = localIp.hostAddress
-            val subnet = localIp.hostAddress.substringBeforeLast(".")
+            val subnet = selfIp.substringBeforeLast(".")
             val gatewayIp = "$subnet.1"
             currentSubnet = "$subnet.*"
 
@@ -785,6 +963,9 @@ fun LanScannerScreen(navController: NavController) {
                 )
             )
             withContext(Dispatchers.Main) { devices = foundDevices.toList() }
+
+            // 0. Fast UDP ARP-Warmup so sleeping phones wake up and populate `ip neigh`
+            launch { warmupSubnetArpTable(subnet) }
 
             // 1. SSDP UPnP Multicast M-SEARCH (captures LOCATION XML URL + SERVER header)
             launch {
@@ -875,68 +1056,35 @@ fun LanScannerScreen(navController: NavController) {
                 val job = scanScope.launch {
                     try {
                         val address = InetAddress.getByName(testIp)
-                        val reachable = address.isReachable(320) || neighborCache.containsKey(testIp)
-                        val openPorts = checkCommonPorts(testIp, if (reachable) 100 else 50)
+                        val reachable = address.isReachable(340) || neighborCache.containsKey(testIp)
+                        val openPorts = checkLanCommonPorts(testIp, if (reachable) 100 else 50)
 
                         if (reachable || openPorts.isNotEmpty()) {
-                            // 7-Layer Real Device Name & MAC Resolution
-                            var mac = neighborCache[testIp] ?: getMacFromArp(testIp)
-                            val (nbName, nbMac) = queryNetBiosNameAndMac(testIp, 380)
-                            if (mac == null && nbMac != null) mac = nbMac
-
-                            val ssdpPair = upnpLocations[testIp]
-                            val upnpFriendly = if (ssdpPair != null) fetchUpnpFriendlyName(ssdpPair.first, ssdpPair.second) else null
-
-                            var realName: String? = resolvedNames[testIp]
-                                ?: nbName
-                                ?: upnpFriendly
-                                ?: queryDnsPtrName(testIp, gatewayIp, 53, 400)
-                                ?: queryDnsPtrName(testIp, testIp, 5353, 380)
-                                ?: fetchHttpOrCastDeviceName(testIp, openPorts)
-
-                            if (realName.isNullOrBlank()) {
-                                try {
-                                    val canonical = address.canonicalHostName
-                                    if (canonical != testIp && !canonical.matches(Regex("\\d+\\.\\d+\\.\\d+\\.\\d+"))) {
-                                        realName = canonical.removeSuffix(".lan").removeSuffix(".local").removeSuffix(".home")
-                                    }
-                                } catch (_: Exception) {}
-                            }
-
-                            val brand = mac?.let { lookupBrand(it) } ?: detectBrandHttp(testIp, openPorts)
-                            val type = guessDeviceType(realName ?: brand, testIp, openPorts, i == 1)
-                            val displayHostname = if (!realName.isNullOrBlank()) {
-                                realName
-                            } else {
-                                buildSmartFallbackDeviceName(testIp, type, brand, mac, openPorts, isVi)
-                            }
-                            val savedAlias = getSavedDeviceAlias(context, testIp, mac)
-                            val isUpnp = ssdpPair != null
+                            val resolved = resolveFullLanIdentity(
+                                context = context,
+                                ip = testIp,
+                                gatewayIp = gatewayIp,
+                                dnsServers = listOf(gatewayIp),
+                                initialMac = neighborCache[testIp],
+                                openPorts = openPorts,
+                                nsdName = resolvedNames[testIp],
+                                ssdpPair = upnpLocations[testIp],
+                                isVi = isVi
+                            )
 
                             synchronized(foundDevices) {
                                 val existingIdx = foundDevices.indexOfFirst { it.ip == testIp }
                                 if (existingIdx == -1) {
-                                    foundDevices.add(
-                                        LanDevice(
-                                            ip = testIp,
-                                            hostname = displayHostname,
-                                            mac = mac,
-                                            type = type,
-                                            openPorts = openPorts,
-                                            isUPnP = isUpnp,
-                                            brand = brand,
-                                            customAlias = savedAlias
-                                        )
-                                    )
+                                    foundDevices.add(resolved)
                                 } else {
                                     val existing = foundDevices[existingIdx]
                                     foundDevices[existingIdx] = existing.copy(
-                                        hostname = displayHostname ?: existing.hostname,
-                                        type = if (type != LanDeviceType.OTHER) type else existing.type,
-                                        openPorts = (existing.openPorts + openPorts).distinct(),
-                                        mac = mac ?: existing.mac,
-                                        brand = brand ?: existing.brand,
-                                        customAlias = savedAlias ?: existing.customAlias
+                                        hostname = resolved.hostname ?: existing.hostname,
+                                        type = if (resolved.type != LanDeviceType.OTHER) resolved.type else existing.type,
+                                        openPorts = (existing.openPorts + resolved.openPorts).distinct(),
+                                        mac = resolved.mac ?: existing.mac,
+                                        brand = resolved.brand ?: existing.brand,
+                                        customAlias = resolved.customAlias ?: existing.customAlias
                                     )
                                 }
                             }
@@ -962,7 +1110,7 @@ fun LanScannerScreen(navController: NavController) {
                     val d = foundDevices[idx]
                     if (d.isSelf) continue
                     val mac = d.mac ?: finalNeighbors[d.ip]
-                    val brand = d.brand ?: mac?.let { lookupBrand(it) }
+                    val brand = d.brand ?: lookupBrandByMac(mac)
                     val lateNsdName = resolvedNames[d.ip]
                     val updatedHostname = if (!lateNsdName.isNullOrBlank()) {
                         lateNsdName
@@ -1709,7 +1857,7 @@ fun RouterControlPanel(device: LanDevice, accent: Color) {
                         addLog(context.getString(R.string.lan_scanner_log_audit_starting))
                         addLog(if (isVi) "Đang rà soát các cổng bảo mật..." else "Scanning security ports...")
                         withContext(Dispatchers.IO) {
-                            val openPorts = checkCommonPorts(device.ip, 200)
+                            val openPorts = checkLanCommonPorts(device.ip, 200)
                             if (openPorts.isNotEmpty()) {
                                 addLog((if (isVi) "Cổng mở: " else "Open ports: ") + openPorts.joinToString(", "))
                                 if (openPorts.contains(23)) addLog(if (isVi) "CẢNH BÁO: Cổng Telnet (23) đang MỞ!" else "WARN: Telnet (23) is OPEN!")
@@ -1923,23 +2071,6 @@ private fun DeviceCard(
     }
 }
 
-private fun getLocalIpAddress(): InetAddress? {
-    try {
-        val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
-        for (intf in interfaces) {
-            val addrs = Collections.list(intf.inetAddresses)
-            for (addr in addrs) {
-                if (!addr.isLoopbackAddress) {
-                    val sAddr = addr.hostAddress
-                    if (sAddr.contains(":")) continue
-                    return addr
-                }
-            }
-        }
-    } catch (ex: Exception) { }
-    return null
-}
-
 private fun getMacAddress(): String? {
     try {
         val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
@@ -1954,14 +2085,14 @@ private fun getMacAddress(): String? {
     return null
 }
 
-private fun checkCommonPorts(ip: String, timeout: Int): List<Int> {
+internal fun checkLanCommonPorts(ip: String, timeout: Int): List<Int> {
     val portsToCheck = listOf(
         80, 443,
         22, 23,
         135, 139, 445,
         554, 8000,
         3389,
-        5555,
+        5000, 5555,
         7000,
         8008, 8009, 8080,
         8089,
@@ -1980,7 +2111,7 @@ private fun checkCommonPorts(ip: String, timeout: Int): List<Int> {
     return openPorts
 }
 
-private fun guessDeviceType(hostname: String?, ip: String, openPorts: List<Int>, isFirstIp: Boolean): LanDeviceType {
+internal fun guessLanDeviceType(hostname: String?, ip: String, openPorts: List<Int>, isFirstIp: Boolean): LanDeviceType {
     val h = hostname?.lowercase() ?: ""
     val ports = openPorts.toSet()
 

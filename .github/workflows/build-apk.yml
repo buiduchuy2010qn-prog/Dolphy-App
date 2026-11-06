@@ -43,34 +43,34 @@ jobs:
           rm -f app/dolphy-vn-fixed.p12
           rm -rf app/src/main/assets/Flipper-IRDB-main/.github app/src/main/assets/Flipper-IRDB-main/.fff-ir-lint.json app/src/main/assets/Flipper-IRDB-main/.gitattributes app/src/main/assets/Flipper-IRDB-main/.gitignore || true
           java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.9.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.8.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.7.apk
-          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.6.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Dolphy-VN-APK
-          path: Dolphy-VN-v2.8.apk
+          path: Dolphy-VN-v2.9.apk
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v2.8-vn"
+          TAG="v2.9-vn"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" Dolphy-VN-v2.8.apk --clobber
+            gh release upload "$TAG" Dolphy-VN-v2.9.apk --clobber
           else
-            gh release create "$TAG" Dolphy-VN-v2.8.apk \
-              --title "Dolphy VN v2.8 (Siêu Mượt 120Hz + Dò Tên Thiết Bị LAN 7 Tầng + Cài Đè Vĩnh Viễn)" \
-              --notes "### Bản nâng cấp Dolphy VN v2.8 (Ultra-Smooth 120Hz & Real LAN Device Identity)
-          - **Chứng chỉ ký cố định (Fixed Keystore) & Tự động tăng VersionCode**: Từ bản v2.8 trở đi, mọi bản cập nhật đều dùng chung 1 chữ ký cố định và tự động tăng mã phiên bản, hỗ trợ cài đè 100% không bao giờ bị xung đột gói.
-          - **Dò Tên Thiết Bị Thực 7 Tầng (LAN Scanner)**: Truy vấn trực tiếp DNS Ngược của Router (\`.1:53\`), NetBIOS (\`UDP 137\`), mDNS (\`5353\`), XML \`<friendlyName>\` của UPnP/SSDP và Google Cast (\`8008\`). Hỗ trợ đặt tên ghi nhớ (\`✏️\`) và nút 1 chạm **Chép MAC/IP & Mở Router để Chặn (Kick)**.
-          - **Siêu Mượt 120Hz (High Refresh Rate)**: Kích hoạt tần số quét cao nhất của màn hình, tắt Compose Live Literals (\`isDebuggable = false\`), loại bỏ 200% GPU Overdraw và đệm RAM cho Animation."
+            gh release create "$TAG" Dolphy-VN-v2.9.apk \
+              --title "Dolphy VN v2.9 (Dò Tên Thiết Bị LAN 9 Tầng + Sửa Quét Sót + Cập Nhật OTA Trực Tiếp)" \
+              --notes "### Bản nâng cấp Dolphy VN v2.9 (9-Layer Real Device Name & In-App OTA)
+          - **Dò Tên Thiết Bị 9 Tầng trong cả Kiểm thử Wi-Fi (Lab) & Quét LAN**: Lấy chính xác tên người dùng đặt hoặc tên dòng máy gốc qua DNS Ngược Router (\`.1:53\` DHCP Hostname), mDNS/Bonjour (\`5353\`), AirPlay \`/info\` (nhận diện đời iPhone/iPad), Google Cast (\`8008\`), UPnP XML \`<friendlyName>\` và NetBIOS (\`UDP 137\`).
+          - **Sửa triệt để lỗi chỉ quét thấy 1 thiết bị (Gateway)**: Ưu tiên dải mạng Wi-Fi (\`wlan0\`) thay vì nhầm sang mạng 4G LTE (\`VoLTE\`), bổ sung gói đánh thức ARP (\`UDP Warmup\`) và quét theo lô 32 IP chống nghẽn luồng.
+          - **Cập nhật OTA trực tiếp trong ứng dụng**: Kiểm tra bản mới ngay khi mở app hoặc trong **Cài đặt -> Kiểm tra cập nhật (OTA)**, hiển thị dung lượng MB đang tải và cài đè 100% không xung đột."
+          fi
+          if gh release view "v2.8-vn" >/dev/null 2>&1; then
+            gh release upload "v2.8-vn" Dolphy-VN-v2.8.apk --clobber
           fi
           if gh release view "v2.7-vn" >/dev/null 2>&1; then
             gh release upload "v2.7-vn" Dolphy-VN-v2.7.apk --clobber
-          fi
-          if gh release view "v2.6-vn" >/dev/null 2>&1; then
-            gh release upload "v2.6-vn" Dolphy-VN-v2.6.apk --clobber
           fi

@@ -788,93 +788,220 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
         lanHosts.clear()
         lanScanning = true
         lanScanJob = scope.launch(Dispatchers.IO) {
-            val hosts = linkedMapOf<String, HubLanHost>()
+            val hosts = ConcurrentHashMap<String, HubLanHost>()
             val gateway = getGatewayIpAddress(context)
-            val self = getHubLocalIpv4()
-
+            val self = getAccurateWifiIpv4(context) ?: getHubLocalIpv4()
+            val dhcpDns = getDhcpDnsServers(context)
             val isVi = AppLocale.isVietnamese(context)
-            if (gateway != null) {
-                hosts[gateway] = HubLanHost(
-                    ip = gateway,
+
+            // Prioritize gateway subnet so 4G LTE (rmnet/ccmni) never hijacks Wi-Fi LAN scan!
+            val subnet = gateway?.substringBeforeLast('.') ?: self?.substringBeforeLast('.')
+            val effectiveGateway = gateway ?: subnet?.let { "$it.1" }
+
+            if (effectiveGateway != null) {
+                hosts[effectiveGateway] = HubLanHost(
+                    ip = effectiveGateway,
                     title = if (isVi) "Gateway / Router chính" else "Gateway / Router",
                     subtitle = "DNS · DHCP · LAN",
                     isGateway = true,
                 )
-            }
-            if (self != null) {
-                hosts[self] = HubLanHost(
-                    ip = self,
-                    title = if (isVi) "Thiết bị này" else "This device",
-                    subtitle = if (isVi) "Bạn" else "You",
-                    isSelf = true,
-                )
-            }
-            readArpTable().forEach { (ip, mac) ->
-                if (!hosts.containsKey(ip)) {
-                    hosts[ip] = HubLanHost(ip, ip, "MAC $mac")
-                } else {
-                    val old = hosts[ip]!!
-                    if (old.subtitle.isBlank()) {
-                        hosts[ip] = old.copy(subtitle = "MAC $mac")
-                    }
-                }
             }
             withContext(Dispatchers.Main) {
                 lanHosts.clear()
                 lanHosts.addAll(hosts.values.sortedWith(compareByDescending<HubLanHost> { it.isGateway }.thenBy { it.ip }))
             }
 
-            val subnet = self?.substringBeforeLast('.') ?: gateway?.substringBeforeLast('.')
-            if (subnet != null) {
-                coroutineScope {
-                    val jobs = (1..254).map { i ->
+            if (subnet == null) {
+                withContext(Dispatchers.Main) { lanScanning = false }
+                return@launch
+            }
+
+            // 1. Fast UDP ARP-Warmup burst to wake up sleeping phones & populate kernel neighbor table
+            launch { warmupSubnetArpTable(subnet) }
+
+            // 2. Background SSDP UPnP M-SEARCH + Multi-Listener NsdManager mDNS discovery
+            val upnpMap = ConcurrentHashMap<String, Pair<String?, String?>>()
+            val nsdMap = ConcurrentHashMap<String, String>()
+
+            val ssdpJob = launch {
+                try {
+                    val ssdpReq = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n"
+                    DatagramSocket().use { sock ->
+                        sock.soTimeout = 1400
+                        val group = InetAddress.getByName("239.255.255.250")
+                        sock.send(DatagramPacket(ssdpReq.toByteArray(), ssdpReq.length, group, 1900))
+                        val buf = ByteArray(1536)
+                        val t0 = System.currentTimeMillis()
+                        while (System.currentTimeMillis() - t0 < 1800) {
+                            try {
+                                val pkt = DatagramPacket(buf, buf.size)
+                                sock.receive(pkt)
+                                val resp = String(pkt.data, 0, pkt.length)
+                                val addr = pkt.address?.hostAddress
+                                if (addr != null) {
+                                    val loc = Regex("(?im)^LOCATION:\\s*(.+)$").find(resp)?.groupValues?.get(1)?.trim()
+                                    val srv = Regex("(?im)^SERVER:\\s*(.+)$").find(resp)?.groupValues?.get(1)?.trim()
+                                    if (loc != null || srv != null) upnpMap[addr] = loc to srv
+                                }
+                            } catch (_: Exception) { break }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            val ndm = context.getSystemService(Context.NSD_SERVICE) as? android.net.nsd.NsdManager
+            val nsdListeners = mutableListOf<android.net.nsd.NsdManager.DiscoveryListener>()
+            if (ndm != null) {
+                val svcTypes = listOf("_airplay._tcp.", "_companion-link._tcp.", "_googlecast._tcp.", "_smb._tcp.", "_http._tcp.", "_printer._tcp.")
+                for (st in svcTypes) {
+                    try {
+                        val l = object : android.net.nsd.NsdManager.DiscoveryListener {
+                            override fun onDiscoveryStarted(regType: String) {}
+                            override fun onServiceFound(si: android.net.nsd.NsdServiceInfo) {
+                                try {
+                                    ndm.resolveService(si, object : android.net.nsd.NsdManager.ResolveListener {
+                                        override fun onResolveFailed(s: android.net.nsd.NsdServiceInfo?, err: Int) {}
+                                        override fun onServiceResolved(s: android.net.nsd.NsdServiceInfo) {
+                                            val h = s.host?.hostAddress
+                                            val n = s.serviceName?.trim()
+                                            if (h != null && !n.isNullOrBlank()) nsdMap[h] = n
+                                        }
+                                    })
+                                } catch (_: Exception) {}
+                            }
+                            override fun onServiceLost(si: android.net.nsd.NsdServiceInfo) {}
+                            override fun onDiscoveryStopped(serviceType: String) {}
+                            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                        }
+                        ndm.discoverServices(st, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, l)
+                        nsdListeners.add(l)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            delay(350)
+            val neighborMap = ConcurrentHashMap(readSystemNeighborTable())
+
+            fun buildHostItem(dev: LanDevice, isGw: Boolean): HubLanHost {
+                val bestTitle = if (isGw) {
+                    val gwBrand = dev.brand ?: dev.hostname?.takeIf { !it.startsWith("Router") }
+                    if (!gwBrand.isNullOrBlank()) {
+                        if (isVi) "Gateway / Router chính ($gwBrand)" else "Gateway / Router ($gwBrand)"
+                    } else {
+                        if (isVi) "Gateway / Router chính" else "Gateway / Router"
+                    }
+                } else {
+                    dev.customAlias ?: dev.hostname ?: dev.brand ?: dev.ip
+                }
+                val subParts = mutableListOf<String>()
+                if (isGw) {
+                    subParts += "DNS · DHCP · LAN"
+                }
+                if (!dev.brand.isNullOrBlank() && !bestTitle.contains(dev.brand, ignoreCase = true)) {
+                    subParts += dev.brand
+                }
+                if (!dev.mac.isNullOrBlank()) {
+                    subParts += "MAC ${dev.mac}"
+                }
+                if (dev.openPorts.isNotEmpty() && !isGw) {
+                    val portLabels = dev.openPorts.take(3).joinToString(", ") { p ->
+                        portServiceNames[p] ?: p.toString()
+                    }
+                    subParts += portLabels
+                }
+                if (subParts.isEmpty()) {
+                    subParts += if (isVi) "đang kết nối" else "online"
+                }
+                return HubLanHost(
+                    ip = dev.ip,
+                    title = bestTitle,
+                    subtitle = subParts.joinToString(" · "),
+                    isGateway = isGw,
+                    isSelf = false
+                )
+            }
+
+            // 3. Controlled Batched Scan (32 IPs at a time so sockets/threads never starve!)
+            coroutineScope {
+                for (batch in (1..254).chunked(32)) {
+                    if (!isActive) break
+                    val batchResults = batch.map { i ->
                         async(Dispatchers.IO) {
                             val ip = "$subnet.$i"
-                            if (hosts.containsKey(ip)) return@async null
-                            val alive = runCatching {
-                                val addr = InetAddress.getByName(ip)
-                                addr.isReachable(180) || quickPortOpen(ip, 80, 60) || quickPortOpen(ip, 443, 60) ||
-                                    quickPortOpen(ip, 53, 40) || quickPortOpen(ip, 22, 40) || quickPortOpen(ip, 445, 40)
+                            if (ip == self) return@async null
+                            val isGw = ip == effectiveGateway || i == 1
+                            val inArp = neighborMap.containsKey(ip)
+                            val reachable = runCatching {
+                                inArp || isGw || InetAddress.getByName(ip).isReachable(340)
                             }.getOrDefault(false)
-                            if (!alive) return@async null
-                            val name = runCatching {
-                                val c = InetAddress.getByName(ip).canonicalHostName
-                                if (c != null && c != ip) c else null
-                            }.getOrNull()
-                            HubLanHost(
+                            val openPorts = checkLanCommonPorts(ip, if (reachable) 95 else 48)
+                            if (!reachable && openPorts.isEmpty()) return@async null
+
+                            val dev = resolveFullLanIdentity(
+                                context = context,
                                 ip = ip,
-                                title = name ?: ip,
-                                subtitle = if (name != null) ip else "online",
+                                gatewayIp = effectiveGateway,
+                                dnsServers = dhcpDns,
+                                initialMac = neighborMap[ip],
+                                openPorts = openPorts,
+                                nsdName = nsdMap[ip],
+                                ssdpPair = upnpMap[ip],
+                                isVi = isVi
+                            )
+                            buildHostItem(dev, isGw)
+                        }
+                    }.awaitAll().filterNotNull()
+
+                    if (batchResults.isNotEmpty()) {
+                        batchResults.forEach { hosts[it.ip] = it }
+                        withContext(Dispatchers.Main) {
+                            lanHosts.clear()
+                            lanHosts.addAll(
+                                hosts.values
+                                    .filter { !it.isSelf }
+                                    .sortedWith(
+                                        compareByDescending<HubLanHost> { it.isGateway }
+                                            .thenBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 0 }
+                                    )
                             )
                         }
                     }
-                    jobs.chunked(32).forEach { chunk ->
-                        if (!isActive) return@coroutineScope
-                        val found = chunk.awaitAll().filterNotNull()
-                        if (found.isNotEmpty()) {
-                            found.forEach { hosts[it.ip] = it }
-                            withContext(Dispatchers.Main) {
-                                lanHosts.clear()
-                                lanHosts.addAll(
-                                    hosts.values.sortedWith(
-                                        compareByDescending<HubLanHost> { it.isGateway }
-                                            .thenBy { it.isSelf }
-                                            .thenBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 0 },
-                                    ),
-                                )
-                            }
-                        }
+                }
+            }
+
+            // 4. Final harvest of ARP/Neighbor table & late mDNS/UPnP responses
+            ssdpJob.cancel()
+            if (ndm != null) {
+                for (l in nsdListeners) {
+                    runCatching { ndm.stopServiceDiscovery(l) }
+                }
+            }
+            val finalArp = readSystemNeighborTable()
+            for ((ip, mac) in finalArp) {
+                if (!ip.startsWith("$subnet.") || ip == self) continue
+                val existing = hosts[ip]
+                if (existing == null) {
+                    val dev = resolveFullLanIdentity(
+                        context = context,
+                        ip = ip,
+                        gatewayIp = effectiveGateway,
+                        dnsServers = dhcpDns,
+                        initialMac = mac,
+                        openPorts = emptyList(),
+                        nsdName = nsdMap[ip],
+                        ssdpPair = upnpMap[ip],
+                        isVi = isVi
+                    )
+                    hosts[ip] = buildHostItem(dev, ip == effectiveGateway)
+                } else {
+                    val lateName = nsdMap[ip]
+                    if (!lateName.isNullOrBlank() && (existing.title.contains("Máy ") || existing.title.contains("Device "))) {
+                        hosts[ip] = existing.copy(title = lateName)
                     }
                 }
             }
-            readArpTable().forEach { (ip, mac) ->
-                val old = hosts[ip]
-                if (old != null && !old.subtitle.contains("MAC")) {
-                    hosts[ip] = old.copy(subtitle = listOf(old.subtitle, "MAC $mac").filter { it.isNotBlank() }.joinToString(" · "))
-                } else if (old == null) {
-                    hosts[ip] = HubLanHost(ip, ip, "MAC $mac")
-                }
-            }
+
             withContext(Dispatchers.Main) {
                 lanHosts.clear()
                 lanHosts.addAll(
@@ -882,11 +1009,11 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                         .filter { !it.isSelf }
                         .sortedWith(
                             compareByDescending<HubLanHost> { it.isGateway }
-                                .thenBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 0 },
-                        ),
+                                .thenBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 0 }
+                        )
                 )
                 lanScanning = false
-                appendLog(if (AppLocale.isVietnamese(context)) "Đã tìm thấy thiết bị: ${lanHosts.size}" else "Devices found: ${lanHosts.size}")
+                appendLog(if (isVi) "Đã tìm thấy thiết bị: ${lanHosts.size}" else "Devices found: ${lanHosts.size}")
             }
         }
     }
@@ -2387,6 +2514,20 @@ private fun getHubLocalIpv4(): String? {
         val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
         for (intf in interfaces) {
             if (!intf.isUp || intf.isLoopback) continue
+            val name = intf.name.lowercase(Locale.US)
+            if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("wifi") || name.startsWith("eth")) {
+                for (addr in Collections.list(intf.inetAddresses)) {
+                    if (addr.isLoopbackAddress) continue
+                    val host = addr.hostAddress ?: continue
+                    if (!host.contains(':')) return host
+                }
+            }
+        }
+        for (intf in interfaces) {
+            if (!intf.isUp || intf.isLoopback) continue
+            val name = intf.name.lowercase(Locale.US)
+            if (name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp") ||
+                name.startsWith("tun") || name.startsWith("ppp") || name.startsWith("dummy")) continue
             for (addr in Collections.list(intf.inetAddresses)) {
                 if (addr.isLoopbackAddress) continue
                 val host = addr.hostAddress ?: continue
@@ -2556,4 +2697,3 @@ private fun buildSnmpGetNext(requestId: Int): ByteArray {
         0x05, 0x00,
     )
 }
-
