@@ -251,7 +251,7 @@ object BleSpamRuntime {
             .setContentTitle("BLE Spam")
             .setContentText(text)
             .setOngoing(true)
-            .addAction(0, "Остановить", stopPending)
+            .addAction(0, if (AppLocale.isVietnamese(context)) "Dừng tất cả" else "Stop", stopPending)
             .build()
 
         NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)

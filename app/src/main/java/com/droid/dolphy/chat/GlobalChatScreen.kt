@@ -138,7 +138,7 @@ fun GlobalChatScreen(navController: NavController) {
                 OutlinedTextField(
                     value = messageText,
                     onValueChange = { messageText = it },
-                    placeholder = { Text("Введите сообщение") },
+                    placeholder = { Text("Nhập tin nhắn BLE...") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(24.dp),
                     colors = TextFieldDefaults.colors(
@@ -168,7 +168,7 @@ fun GlobalChatScreen(navController: NavController) {
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Отправить",
+                        contentDescription = "Gửi",
                         tint = Color.White
                     )
                 }

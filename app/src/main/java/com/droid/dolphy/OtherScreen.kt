@@ -226,7 +226,7 @@ fun OtherScreen(navController: NavController, spamViewModel: SpamViewModel) {
                                     .padding(top = 8.dp, bottom = 2.dp),
                             ) {
                                 Text(
-                                    text = "Dolphy",
+                                    text = customAppTitle,
                                     fontFamily = flipperFontFamily,
                                     fontStyle = FontStyle.Italic,
                                     fontSize = 42.sp,
@@ -505,7 +505,7 @@ fun OtherScreen(navController: NavController, spamViewModel: SpamViewModel) {
                                     .padding(top = 8.dp, bottom = 2.dp),
                             ) {
                                 Text(
-                                    text = "Dolphy",
+                                    text = customAppTitle,
                                     fontFamily = flipperFontFamily,
                                     fontStyle = FontStyle.Italic,
                                     fontSize = 42.sp,

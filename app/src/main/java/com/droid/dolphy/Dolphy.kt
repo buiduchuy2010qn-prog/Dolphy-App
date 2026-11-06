@@ -33,7 +33,7 @@ private const val KEY_WIFI_BRUTE_SUCCESS = "wifi_brute_success"
 
 private const val LEVEL_THRESHOLD = 200
 private const val BUTTHURT_MAX = 14
-private const val DAILY_APP_LIMIT = 20
+private const val DAILY_APP_LIMIT = 999999
 
 enum class DolphinApp {
     Nfc,

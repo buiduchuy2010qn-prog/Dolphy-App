@@ -1,0 +1,63 @@
+name: Build & Release Dolphy VN APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Python 3.11 (for Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Build Debug & Release APKs
+        run: |
+          java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.6-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk Dolphy-VN-v2.6-release.apk
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dolphy-VN-APKs
+          path: |
+            Dolphy-VN-v2.6-release.apk
+            Dolphy-VN-v2.6-debug.apk
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v2.6-vn"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" Dolphy-VN-v2.6-release.apk Dolphy-VN-v2.6-debug.apk --clobber
+          else
+            gh release create "$TAG" Dolphy-VN-v2.6-release.apk Dolphy-VN-v2.6-debug.apk \
+              --title "Dolphy VN v2.6 (Tiếng Việt & English - Offline Safe)" \
+              --notes "### Bản cập nhật Dolphy VN v2.6 (Custom Edition)
+          - **Mặc định Tiếng Việt 100%**: Hỗ trợ chuyển đổi Tiếng Việt / Tiếng Anh / Tiếng Nga trong Cài đặt.
+          - **Đổi tên App tùy ý**: Vào **Cài đặt → Cài đặt chung → Tên ứng dụng (Đổi tên tùy ý)** để đổi tên hiển thị bất kỳ lúc nào.
+          - **An toàn Offline-Safe**: Loại bỏ hoàn toàn các kết nối máy chủ WAN ngoài và hộp thoại quảng cáo; giữ nguyên các công cụ mạng nội bộ (Quét LAN/Wi-Fi, SmartTV Cast, Wi-Fi Print)."
+          fi

@@ -128,7 +128,7 @@ class KtorServerManager(private val context: Context) {
 
     fun start(port: Int = 8080): Int {
         if (server != null) {
-            log("Сервер уже запущен на порту $actualPort")
+            log("Máy chủ đang chạy tại cổng $actualPort")
             return actualPort
         }
 
@@ -138,7 +138,7 @@ class KtorServerManager(private val context: Context) {
         } catch (_: Exception) {
         }
 
-        log("Инициализация Netty на порту $port...")
+        log("Đang khởi tạo Netty tại cổng $port...")
         for (tryPort in port..(port + 30)) {
             try {
                 actualPort = tryPort
@@ -164,7 +164,7 @@ class KtorServerManager(private val context: Context) {
                     intercept(ApplicationCallPipeline.Call) {
                         val remoteHost = call.request.local.remoteHost
                         if (!isLocalClient(remoteHost)) {
-                            log("Отклонено внешнее подключение: $remoteHost")
+                            log("Đã chặn kết nối ngoài LAN: $remoteHost")
                             call.respondText(
                                 "Local network only",
                                 ContentType.Text.Plain,
@@ -242,7 +242,7 @@ class KtorServerManager(private val context: Context) {
                                     }
                                     call.respondBytes(bytes, contentType)
                                 } catch (e: Exception) {
-                                    log("Ошибка аудио: ${e.message}")
+                                    log("Lỗi âm thanh: ${e.message}")
                                     call.respond(HttpStatusCode.NotFound)
                                 }
                             } else {
@@ -256,7 +256,7 @@ class KtorServerManager(private val context: Context) {
                             _deviceCount.value = sessions.size
                             val remote = call.request.local.remoteHost
                             if (isCustomHtmlMode()) {
-                                log("Заход на сайт (WS) ip=$remote id=${sessionId.take(8)}")
+                                log("Kết nối (WS) ip=$remote id=${sessionId.take(8)}")
                             }
                             try {
                                 for (frame in incoming) {
@@ -271,18 +271,18 @@ class KtorServerManager(private val context: Context) {
                                                 }
                                             }
                                             text == "CLIENT:VISIT" || text.startsWith("CLIENT:VISIT") -> {
-                                                log("Заход на сайт: $remote")
+                                                log("Truy cập trang: $remote")
                                             }
                                             text.startsWith("CLIENT:TEXT:") -> {
                                                 val payload = text.removePrefix("CLIENT:TEXT:")
                                                 if (payload.isNotBlank()) {
-                                                    log("Ввод: $payload")
+                                                    log("Dữ liệu: $payload")
                                                 }
                                             }
                                             text.startsWith("CLIENT:INPUT:") -> {
                                                 val payload = text.removePrefix("CLIENT:INPUT:")
                                                 if (payload.isNotBlank()) {
-                                                    log("Ввод: $payload")
+                                                    log("Dữ liệu: $payload")
                                                 }
                                             }
                                         }
@@ -294,7 +294,7 @@ class KtorServerManager(private val context: Context) {
                                 sessions.remove(sessionId)
                                 _deviceCount.value = sessions.size
                                 if (isCustomHtmlMode()) {
-                                    log("Выход с сайта id=${sessionId.take(8)}")
+                                    log("Đã ngắt kết nối id=${sessionId.take(8)}")
                                 }
                             }
                         }
@@ -312,7 +312,7 @@ class KtorServerManager(private val context: Context) {
                     }
                 }
                 if (!healthy) {
-                    log("Порт $tryPort: health не OK, пробуем другой…")
+                    log("Cổng $tryPort: không phản hồi, đang thử cổng khác…")
                     try {
                         engine.stop(0, 0, TimeUnit.MILLISECONDS)
                     } catch (_: Exception) {
@@ -320,10 +320,10 @@ class KtorServerManager(private val context: Context) {
                     server = null
                     continue
                 }
-                log("Сервер запущен на порту $tryPort (health OK)")
+                log("Máy chủ đã chạy trên cổng $tryPort (OK)")
                 return tryPort
             } catch (e: Exception) {
-                log("Порт $tryPort не работает: ${e.javaClass.simpleName}: ${e.message}")
+                log("Cổng $tryPort lỗi: ${e.javaClass.simpleName}: ${e.message}")
                 try {
                     server?.stop(0, 0, TimeUnit.MILLISECONDS)
                 } catch (_: Exception) {
@@ -331,7 +331,7 @@ class KtorServerManager(private val context: Context) {
                 server = null
             }
         }
-        log("Не удалось запустить сервер (все порты заняты)")
+        log("Không thể khởi động máy chủ (tất cả cổng đều bận)")
         return -1
     }
 
@@ -354,7 +354,7 @@ class KtorServerManager(private val context: Context) {
                 call.respondText(html, ContentType.Text.Html.withCharset(Charsets.UTF_8))
             }
         } catch (e: Exception) {
-            log("Ошибка HTML: ${e.message}")
+            log("Lỗi HTML: ${e.message}")
             try {
                 call.respondText(FALLBACK_HTML, ContentType.Text.Html.withCharset(Charsets.UTF_8))
             } catch (_: Exception) {
@@ -371,7 +371,7 @@ class KtorServerManager(private val context: Context) {
         server = null
         sessions.clear()
         _deviceCount.value = 0
-        log("Локальный сервер остановлен")
+        log("Đã dừng máy chủ nội bộ")
     }
 
     fun broadcast(message: String) {

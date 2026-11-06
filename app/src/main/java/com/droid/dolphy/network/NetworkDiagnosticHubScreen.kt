@@ -71,6 +71,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import com.droid.dolphy.AppLocale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -172,7 +173,7 @@ private data class HubLanHost(
     val isSelf: Boolean = false,
 )
 
-private const val STOCK_GROUP_NAME = "Стоковые пароли"
+private const val STOCK_GROUP_NAME = "Mật khẩu mặc định (Default)"
 
 @Serializable
 private data class PasswordGroupDto(
@@ -432,15 +433,16 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             ?: "255.255.255.255"
         val isHostTarget = !targetIp.isNullOrBlank()
         val isRouterMode = !isHostTarget || primaryIp == gateway
+        val isVi = AppLocale.isVietnamese(context)
         if (isHostTarget && !isRouterMode) {
-            appendLog("Подготовка L3/L4 flood → $primaryIp")
-            appendLog("Режим: устройство + DNS/NAT роутера")
+            appendLog(if (isVi) "Chuẩn bị kiểm thử L3/L4 nội bộ → $primaryIp" else "Preparing local L3/L4 test → $primaryIp")
+            appendLog(if (isVi) "Chế độ: Thiết bị LAN + DNS nội bộ" else "Mode: LAN Device + Local DNS")
         } else {
             appendLog(context.getString(R.string.network_hub_log_prepare))
-            appendLog("Режим: роутер — DNS-резолвер + NAT + канал")
+            appendLog(if (isVi) "Chế độ: Router nội bộ (Offline-Safe, không kết nối WAN ngoài)" else "Mode: Local Router (Offline-Safe, no external WAN)")
         }
         if (selectedTargetLabel.isNotBlank()) {
-            appendLog("Цель: $selectedTargetLabel")
+            appendLog(if (isVi) "Mục tiêu: $selectedTargetLabel" else "Target: $selectedTargetLabel")
         }
         if (dhcpDns.isNotEmpty()) {
             appendLog("DHCP DNS: ${dhcpDns.joinToString()}")
@@ -456,7 +458,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 .apply { acquire() }
         }.getOrNull()
         if (wakeLock != null || wifiLock != null) {
-            appendLog("Удержание радио: WakeLock/WifiLock активны")
+            appendLog(if (isVi) "Giữ kết nối Wi-Fi: WakeLock/WifiLock đang bật" else "Radio lock: WakeLock/WifiLock active")
         }
 
         val job = scope.launch(Dispatchers.IO) {
@@ -465,7 +467,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             val primaryAddr = runCatching { InetAddress.getByName(primaryIp) }.getOrNull()
             if (primaryAddr == null) {
                 withContext(Dispatchers.Main) {
-                    appendLog("Не удалось резолвить $primaryIp")
+                    appendLog(if (isVi) "Không thể phân giải địa chỉ $primaryIp" else "Failed to resolve $primaryIp")
                 }
                 return@launch
             }
@@ -483,33 +485,14 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             if (dnsTargets.isEmpty()) dnsTargets += primaryAddr
             val dnsList = dnsTargets.toList()
 
-            val externalHosts = listOf(
-                "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4",
-                "9.9.9.9", "208.67.222.222", "208.67.220.220",
-                "142.250.190.14",
-                "13.107.21.200",
-                "104.16.132.229",
-                "23.192.228.80",
-                "151.101.1.69",
-            ).mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
-            val externalPorts = intArrayOf(53, 80, 443, 8080, 8443, 123, 853)
-
-            val bandwidthUrls = listOf(
-                "http://speedtest.tele2.net/10MB.zip",
-                "http://speedtest.tele2.net/1MB.zip",
-                "http://ipv4.download.thinkbroadband.com/5MB.zip",
-                "http://ipv4.download.thinkbroadband.com/10MB.zip",
-                "http://proof.ovh.net/files/1Mb.dat",
-                "http://proof.ovh.net/files/10Mb.dat",
-            )
+            // Offline-Safe: Restricted strictly to local LAN / Gateway addresses (no external WAN servers)
+            val externalHosts = dnsList
+            val externalPorts = intArrayOf(53, 80, 443, 8080, 8443)
 
             withContext(Dispatchers.Main) {
                 appendLog(context.getString(R.string.network_hub_log_target, primaryIp))
-                appendLog("DNS targets: ${dnsList.joinToString { it.hostAddress ?: "?" }}")
-                if (isRouterMode) {
-                    appendLog("NAT exhaust → ${externalHosts.size} WAN hosts · bandwidth streams")
-                }
-                appendLog("Half-open SYN × ${if (isRouterMode) 10 else 18} · SSDP/mDNS/SNMP рефлексия")
+                appendLog("Local targets: ${dnsList.joinToString { it.hostAddress ?: "?" }}")
+                appendLog(if (isVi) "Kiểm thử tải nội bộ LAN · SSDP/mDNS/SNMP" else "Local LAN load · SSDP/mDNS/SNMP")
             }
 
             val localUdpPorts = intArrayOf(53, 67, 68, 123, 1900, 5353, 161, 137, 138)
@@ -765,42 +748,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 }
             }
 
-            val bwWorkers = (1..if (isRouterMode) 8 else 3).map { workerId ->
-                launch {
-                    val random = java.util.Random(workerId + 11000L)
-                    val buf = ByteArray(64 * 1024)
-                    while (isActive) {
-                        val urlStr = bandwidthUrls[random.nextInt(bandwidthUrls.size)]
-                        runCatching {
-                            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                                connectTimeout = 2500
-                                readTimeout = 4000
-                                instanceFollowRedirects = true
-                                useCaches = false
-                                requestMethod = "GET"
-                                setRequestProperty("User-Agent", "DolphyBW/$workerId")
-                                setRequestProperty("Connection", "close")
-                                setRequestProperty("Accept-Encoding", "identity")
-                            }
-                            try {
-                                val code = conn.responseCode
-                                if (code in 200..399) {
-                                    conn.inputStream.use { input ->
-                                        while (isActive) {
-                                            val n = input.read(buf)
-                                            if (n <= 0) break
-                                            byteCount.addAndGet(n.toLong())
-                                            packetCount.incrementAndGet()
-                                        }
-                                    }
-                                }
-                            } finally {
-                                conn.disconnect()
-                            }
-                        }
-                    }
-                }
-            }
+            val bwWorkers = emptyList<Job>()
 
             launch {
                 var lastPkts = 0L
@@ -844,19 +792,20 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             val gateway = getGatewayIpAddress(context)
             val self = getHubLocalIpv4()
 
+            val isVi = AppLocale.isVietnamese(context)
             if (gateway != null) {
                 hosts[gateway] = HubLanHost(
                     ip = gateway,
-                    title = "Шлюз / роутер",
-                    subtitle = "DNS · DHCP · интернет",
+                    title = if (isVi) "Gateway / Router chính" else "Gateway / Router",
+                    subtitle = "DNS · DHCP · LAN",
                     isGateway = true,
                 )
             }
             if (self != null) {
                 hosts[self] = HubLanHost(
                     ip = self,
-                    title = "Это устройство",
-                    subtitle = "вы",
+                    title = if (isVi) "Thiết bị này" else "This device",
+                    subtitle = if (isVi) "Bạn" else "You",
                     isSelf = true,
                 )
             }
@@ -937,7 +886,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                         ),
                 )
                 lanScanning = false
-                appendLog("Найдено устройств: ${lanHosts.size}")
+                appendLog(if (AppLocale.isVietnamese(context)) "Đã tìm thấy thiết bị: ${lanHosts.size}" else "Devices found: ${lanHosts.size}")
             }
         }
     }
@@ -1309,8 +1258,8 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                 contentPadding = 0.dp
                             ) {
                                 SignalRow(
-                                    title = "DoS устройства",
-                                    description = "DoS конкретного устройства в сети",
+                                    title = if (AppLocale.isVietnamese(context)) "Kiểm thử thiết bị LAN" else "LAN Device Test",
+                                    description = if (AppLocale.isVietnamese(context)) "Kiểm thử kết nối tới một thiết bị cụ thể trong mạng LAN" else "Test connection to a specific device on LAN",
                                     icon = Icons.Default.WifiOff,
                                     accentColor = Color(0xFFFF6D00),
                                     onClick = {
@@ -1369,12 +1318,12 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Text(
-                                text = "DoS устройства",
+                                text = if (AppLocale.isVietnamese(context)) "Chọn thiết bị trong LAN" else "Select LAN Device",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = "Выберите устройство в сети «${currentDialogNetwork.ssid}»",
+                                text = if (AppLocale.isVietnamese(context)) "Chọn thiết bị trong mạng «${currentDialogNetwork.ssid}»" else "Select a device on «${currentDialogNetwork.ssid}»",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1385,14 +1334,14 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                 ) {
                                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                                     Text(
-                                        "Сканирование сети… ${lanHosts.size}",
+                                        if (AppLocale.isVietnamese(context)) "Đang quét mạng LAN… ${lanHosts.size}" else "Scanning LAN… ${lanHosts.size}",
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
                                 }
                             } else {
                                 Text(
-                                    "Найдено: ${lanHosts.size}",
+                                    if (AppLocale.isVietnamese(context)) "Tìm thấy: ${lanHosts.size}" else "Found: ${lanHosts.size}",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1408,7 +1357,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                 if (lanHosts.isEmpty() && !lanScanning) {
                                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                         Text(
-                                            "Устройства не найдены.\nПодключитесь к этой Wi‑Fi сети.",
+                                            if (AppLocale.isVietnamese(context)) "Không tìm thấy thiết bị.\nHãy kết nối vào mạng Wi-Fi này trước." else "No devices found.\nConnect to this Wi-Fi network first.",
                                             textAlign = TextAlign.Center,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -1492,7 +1441,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                     enabled = !lanScanning,
                                     modifier = Modifier.weight(1f),
                                 ) {
-                                    Text("Обновить")
+                                    Text(if (AppLocale.isVietnamese(context)) "Quét lại" else "Refresh")
                                 }
                             }
                         }
@@ -2279,9 +2228,7 @@ private fun buildRandomRecursiveDnsQuery(random: java.util.Random): ByteArray {
     }
     val num = random.nextInt(1_000_000)
     val roots = arrayOf(
-        "com", "net", "org", "ru", "io", "info", "xyz", "online",
-        "google.com", "cloudflare.com", "amazon.com", "microsoft.com",
-        "yandex.ru", "vk.com", "apple.com",
+        "lan", "local", "home.arpa", "internal", "router.local"
     )
     val root = roots[random.nextInt(roots.size)]
     val host = when (random.nextInt(4)) {

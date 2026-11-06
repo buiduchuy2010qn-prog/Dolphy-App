@@ -254,7 +254,7 @@ private fun RtspView(url: String, onError: (String) -> Unit) {
             setMediaSource(source)
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
-                    onError("Ошибка воспроизведения RTSP: ${error.errorCodeName}")
+                    onError("Lỗi phát RTSP: ${error.errorCodeName}")
                 }
             })
             playWhenReady = true

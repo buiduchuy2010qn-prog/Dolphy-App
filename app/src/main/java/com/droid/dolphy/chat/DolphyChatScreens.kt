@@ -513,7 +513,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
             DolphyChatManager(context)
         } catch (e: Exception) {
             hasError = true
-            errorMessage = "Ошибка инициализации: ${e.message}"
+            errorMessage = "Lỗi khởi tạo: ${e.message}"
             null
         }
     }
@@ -528,7 +528,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
             bluetoothAdapter != null
         } catch (e: Exception) {
             hasError = true
-            errorMessage = "Ошибка Bluetooth: ${e.message}"
+            errorMessage = "Lỗi Bluetooth: ${e.message}"
             false
         }
     }
@@ -553,7 +553,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Text(
-                    text = "Произошла ошибка",
+                    text = "Đã xảy ra lỗi",
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.Bold,
@@ -580,7 +580,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Text(
-                    text = "Bluetooth недоступен",
+                    text = "Bluetooth không khả dụng",
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.Bold,
@@ -590,7 +590,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Для работы Dolphy Chat необходим Bluetooth",
+                    text = "Cần bật Bluetooth để sử dụng Dolphy Chat",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center
@@ -618,7 +618,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
 
 
                 Text(
-                    text = "Чат по BLE, дистанция 10-30 метров",
+                    text = "Nhắn tin nội bộ qua BLE, phạm vi 10-30m",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center
@@ -632,7 +632,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
                 OutlinedTextField(
                     value = userName,
                     onValueChange = { userName = it },
-                    label = { Text("Введите имя") },
+                    label = { Text("Nhập tên hiển thị") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = TextFieldDefaults.colors(
@@ -662,7 +662,7 @@ fun DolphyChatWelcomeScreen(navController: NavController) {
                     enabled = userName.isNotBlank()
                 ) {
                     Text(
-                        text = "Далее",
+                        text = "Tiếp tục",
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium
                     )
@@ -720,31 +720,31 @@ fun DolphyChatMainScreen(userName: String, navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Поиск устройств...",
+                            text = "Đang tìm thiết bị xung quanh...",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Реклама включена",
+                            text = "Đang phát tín hiệu BLE",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                         )
                     } else if (isAdvertising.value) {
                         Text(
-                            text = "Реклама включена",
+                            text = "Đang phát tín hiệu BLE",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Ожидание сканирования...",
+                            text = "Đang chờ quét...",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                         )
                     } else {
                         Text(
-                            text = "Инициализация...",
+                            text = "Đang khởi tạo...",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                         )
@@ -768,7 +768,7 @@ fun DolphyChatMainScreen(userName: String, navController: NavController) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Пользователи не найдены\nУбедитесь что у них запущен Dolphy Chat",
+                                text = "Chưa tìm thấy người dùng nào\nHãy đảm bảo họ cũng đang mở Dolphy Chat",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                                 textAlign = TextAlign.Center
@@ -842,7 +842,7 @@ fun ChatUserCard(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = "Доступен для чата",
+                    text = "Sẵn sàng trò chuyện",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                 )
@@ -909,7 +909,7 @@ fun DolphyChatConversationScreen(
                 OutlinedTextField(
                     value = messageText,
                     onValueChange = { messageText = it },
-                    placeholder = { Text("Введите сообщение") },
+                    placeholder = { Text("Nhập tin nhắn...") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(24.dp),
                     colors = TextFieldDefaults.colors(
@@ -936,7 +936,7 @@ fun DolphyChatConversationScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Отправить",
+                        contentDescription = "Gửi",
                         tint = Color.White
                     )
                 }

@@ -107,8 +107,8 @@ fun DolphyZeroScreen(navController: NavController) {
                 ZeroMenuItem("IR", "IR Storm", ZeroAction.Navigate("ir_storm")),
                 ZeroMenuItem("IJ", "IR Jammer", ZeroAction.Navigate("ir_jammer")),
                 ZeroMenuItem("AR", "Archive", ZeroAction.Navigate("user_ir_remotes")),
-                ZeroMenuItem("JS", "JS Runner", ZeroAction.ShowMessage("JS Runner не реализован в Android-версии")),
-                ZeroMenuItem("UP", "Updater", ZeroAction.ShowMessage("Updater доступен только в firmware"))
+                ZeroMenuItem("JS", "JS Runner", ZeroAction.ShowMessage("JS Runner được tích hợp trong mục Plugins")),
+                ZeroMenuItem("UP", "Updater", ZeroAction.ShowMessage("Cập nhật qua GitHub Releases"))
             )
         )
     }
@@ -121,7 +121,7 @@ fun DolphyZeroScreen(navController: NavController) {
                 ZeroMenuItem("IR", "Infrared", ZeroAction.Navigate("ir_flipper_home")),
                 ZeroMenuItem("RF", "125 kHz RFID", ZeroAction.Navigate("nfc_tools")),
                 ZeroMenuItem("NF", "NFC", ZeroAction.Navigate("nfc_tools")),
-                ZeroMenuItem("U2", "U2F", ZeroAction.ShowMessage("U2F не поддерживается Android-версией")),
+                ZeroMenuItem("U2", "U2F", ZeroAction.ShowMessage("U2F chưa hỗ trợ trên phiên bản Android")),
                 ZeroMenuItem("AR", "Archive", ZeroAction.Navigate("user_ir_remotes"))
             )
         )

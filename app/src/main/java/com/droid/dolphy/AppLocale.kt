@@ -5,16 +5,16 @@ import android.content.res.Configuration
 import android.os.Build
 import java.util.Locale
 
-
-
-
-
-
 object AppLocale {
     fun wrap(context: Context): Context {
         val prefs = context.getSharedPreferences("DolphyPrefs", Context.MODE_PRIVATE)
-        val language = prefs.getString("app_language", "ru") ?: "ru"
-        val locale = Locale.forLanguageTag(if (language == "en") "en" else "ru")
+        val language = prefs.getString("app_language", "vi") ?: "vi"
+        val tag = when (language) {
+            "en" -> "en"
+            "ru" -> "ru"
+            else -> "vi"
+        }
+        val locale = Locale.forLanguageTag(tag)
         Locale.setDefault(locale)
 
         val config = Configuration(context.resources.configuration)
@@ -28,5 +28,10 @@ object AppLocale {
             context
         }
     }
-}
 
+    fun isVietnamese(context: Context): Boolean {
+        val prefs = context.getSharedPreferences("DolphyPrefs", Context.MODE_PRIVATE)
+        val language = prefs.getString("app_language", "vi") ?: "vi"
+        return language == "vi"
+    }
+}

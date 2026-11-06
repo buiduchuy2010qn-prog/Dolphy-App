@@ -753,18 +753,8 @@ fun MainScreen(
 
 
     if (lastSeenVersion != currentVersion) {
-        if (currentVersion == "2.5") {
-            PluginSystemWarningDialog(onConfirm = { spamViewModel.completeWelcomeDialog() })
-        } else {
-            WelcomeDialog(
-                onDismiss = { spamViewModel.completeWelcomeDialog() },
-                onSubscribe = {
-                    runCatching { uriHandler.openUri("https://t.me/Dolphy_app_official") }
-                },
-                onSupport = {
-                    runCatching { uriHandler.openUri("https://yoomoney.ru/fundraise/1GT6KC59M2D.260402") }
-                }
-            )
+        LaunchedEffect(currentVersion) {
+            spamViewModel.completeWelcomeDialog()
         }
     }
 
@@ -2967,6 +2957,34 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     }
     val uriHandler = LocalUriHandler.current
     val appLanguage by spamViewModel.appLanguage.collectAsState()
+    val customAppTitle by spamViewModel.customAppTitle.collectAsState()
+    var showAppRenameDialog by remember { mutableStateOf(false) }
+    var appRenameInput by remember(customAppTitle) { mutableStateOf(customAppTitle) }
+
+    if (showAppRenameDialog) {
+        val isVi = appLanguage == "vi"
+        ExpressiveDialog(
+            onDismissRequest = { showAppRenameDialog = false },
+            title = if (isVi) "Đổi tên ứng dụng" else "Custom App Name",
+            text = if (isVi) "Nhập tên hiển thị tùy ý cho ứng dụng trên màn hình khởi động và trang chính:" else "Enter any custom display name for the app:",
+            confirmText = if (isVi) "Lưu tên" else "Save",
+            onConfirm = {
+                spamViewModel.setCustomAppTitle(appRenameInput)
+                showAppRenameDialog = false
+            },
+            dismissText = stringResource(R.string.action_cancel),
+            onDismiss = { showAppRenameDialog = false }
+        ) {
+            OutlinedTextField(
+                value = appRenameInput,
+                onValueChange = { appRenameInput = it },
+                singleLine = true,
+                label = { Text(if (isVi) "Tên ứng dụng" else "App Name") },
+                placeholder = { Text("Dolphy VN") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -3016,7 +3034,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                 Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
                     M3SegmentedListSectionHeader(title = stringResource(R.string.settings_general).uppercase())
 
-                    val generalItems = 4
+                    val generalItems = 5
 
 
                     MaterialCard(
@@ -3041,22 +3059,49 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
+                            val langOptions = listOf(
+                                "Tiếng Việt" to "vi",
+                                "English" to "en",
+                                stringResource(R.string.language_russian) to "ru",
+                            )
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                listOf(
-                                    stringResource(R.string.language_russian) to "ru",
-                                    "English" to "en",
-                                ).forEachIndexed { index, (label, language) ->
+                                langOptions.forEachIndexed { index, (label, language) ->
                                     SegmentedButton(
                                         selected = appLanguage == language,
                                         onClick = {
                                             spamViewModel.setAppLanguage(language)
                                             applyInAppLocale(context)
                                         },
-                                        shape = SegmentedButtonDefaults.itemShape(index, 2),
-                                        label = { Text(label) },
+                                        shape = SegmentedButtonDefaults.itemShape(index, langOptions.size),
+                                        label = { Text(label, maxLines = 1) },
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(1, generalItems),
+                        contentPadding = 0.dp,
+                    ) {
+                        SettingsItem(onClick = { showAppRenameDialog = true }) {
+                            Icon(Icons.Default.Edit, null, tint = accentColor, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (appLanguage == "vi") "Tên ứng dụng (Đổi tên tùy ý)" else "Custom App Name",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    customAppTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = accentColor,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
 
@@ -3065,7 +3110,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(1, generalItems),
+                        shape = getSegmentedShape(2, generalItems),
                         contentPadding = 0.dp
                     ) {
                         Row(
@@ -3094,7 +3139,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(2, generalItems),
+                        shape = getSegmentedShape(3, generalItems),
                         contentPadding = 0.dp,
                     ) {
                         SettingsItem(onClick = { navController.navigate("plugin_manager") }) {
@@ -3116,7 +3161,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(3, generalItems),
+                        shape = getSegmentedShape(4, generalItems),
                         contentPadding = 0.dp
                     ) {
                         Row(
@@ -3643,18 +3688,10 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         contentPadding = 0.dp
                     ) {
                         Column {
-                            SettingsItem(onClick = { uriHandler.openUri("https://t.me/Dolphy_app_official") }) {
-                                Icon(Icons.AutoMirrored.Filled.Send, null, tint = accentColor, modifier = Modifier.size(24.dp))
-                                Spacer(Modifier.width(12.dp))
-                                Text("Dolphy dev", style = MaterialTheme.typography.bodyLarge)
-                                Spacer(Modifier.weight(1f))
-                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            MaterialDivider()
-                            SettingsItem(onClick = { uriHandler.openUri("https://github.com/unvoiddd/Dolphy-App") }) {
+                            SettingsItem(onClick = { uriHandler.openUri("https://github.com/buiduchuy2010qn-prog/Dolphy-App") }) {
                                 Icon(Icons.Default.Circle, null, tint = accentColor, modifier = Modifier.size(24.dp))
                                 Spacer(Modifier.width(12.dp))
-                                Text("Github", style = MaterialTheme.typography.bodyLarge)
+                                Text("GitHub (Dolphy VN Custom)", style = MaterialTheme.typography.bodyLarge)
                                 Spacer(Modifier.weight(1f))
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -3666,7 +3703,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
             item {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Dolphy ($appVersion)\nЗащищено GNU GPL",
+                    text = "$customAppTitle ($appVersion)\nGNU GPL v3 · Offline-Safe Edition",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
@@ -5819,8 +5856,10 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     val animatedBackgroundEnabled: StateFlow<Boolean> = _animatedBackgroundEnabled
     private val _expressiveEnabled = MutableStateFlow(prefs.getBoolean("md3_expressive", false))
     val expressiveEnabled: StateFlow<Boolean> = _expressiveEnabled
-    private val _appLanguage = MutableStateFlow(prefs.getString("app_language", "ru") ?: "ru")
+    private val _appLanguage = MutableStateFlow(prefs.getString("app_language", "vi") ?: "vi")
     val appLanguage: StateFlow<String> = _appLanguage
+    private val _customAppTitle = MutableStateFlow(prefs.getString("custom_app_title", "Dolphy VN") ?: "Dolphy VN")
+    val customAppTitle: StateFlow<String> = _customAppTitle
     private val _cyclicDolphinAnimationEnabled = MutableStateFlow(prefs.getBoolean("cyclic_dolphin_animation_enabled", false))
     val cyclicDolphinAnimationEnabled: StateFlow<Boolean> = _cyclicDolphinAnimationEnabled
     private val _quickStartupEnabled = MutableStateFlow(prefs.getBoolean("quick_startup_enabled", false))
@@ -6041,9 +6080,19 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     fun setAppLanguage(language: String) {
-        val normalized = if (language == "en") "en" else "ru"
+        val normalized = when (language) {
+            "en" -> "en"
+            "ru" -> "ru"
+            else -> "vi"
+        }
         prefs.edit { putString("app_language", normalized) }
         _appLanguage.value = normalized
+    }
+
+    fun setCustomAppTitle(title: String) {
+        val cleaned = title.trim().ifBlank { "Dolphy VN" }
+        prefs.edit { putString("custom_app_title", cleaned) }
+        _customAppTitle.value = cleaned
     }
 
     fun setCyclicDolphinAnimationEnabled(enabled: Boolean) {

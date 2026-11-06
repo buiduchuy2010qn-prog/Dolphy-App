@@ -34,7 +34,7 @@ fun functionDestinationSections(): List<Pair<String, List<FunctionDestination>>>
     val bySection = androidx.compose.runtime.remember(revision, pluginCards) { PluginRegistry.otherBySection() }
 
     val irFlipperTitle = stringResource(R.string.ir_flipper_remotes)
-    val irFlipperDesc = stringResource(R.string.other_ir_flipper_desc) + " + Телевизоры"
+    val irFlipperDesc = stringResource(R.string.other_ir_flipper_desc) + " + TV"
     val irStormTitle = stringResource(R.string.ir_storm)
     val irStormDesc = stringResource(R.string.other_ir_storm_desc)
     val irJammerTitle = stringResource(R.string.ir_jammer)
@@ -55,6 +55,7 @@ fun functionDestinationSections(): List<Pair<String, List<FunctionDestination>>>
     val nfcDesc = stringResource(R.string.other_nfc_desc)
     val qrTitle = stringResource(R.string.other_qr_tools)
     val qrDesc = stringResource(R.string.other_qr_tools_desc)
+    val netHubTitle = stringResource(R.string.network_hub_title)
     val netHubDesc = stringResource(R.string.network_hub_card_description)
     val tvCastTitle = stringResource(R.string.smarttv_cast_title)
     val tvCastDesc = stringResource(R.string.smarttv_cast_card_description)
@@ -85,8 +86,8 @@ fun functionDestinationSections(): List<Pair<String, List<FunctionDestination>>>
             FunctionDestination(Icons.Default.Tv, irUnivTitle, irUnivDesc, "other/universal_remotes_home", OtherSections.INFRARED),
         ) + plugins(OtherSections.INFRARED)
         sections += OtherSections.BLUETOOTH to listOf(
-            FunctionDestination(Icons.Default.Bolt, "BLE Spam", "Спам запросами сопряжения Apple, Android, Windows, Samsung", "ble_spam_screen", OtherSections.BLUETOOTH),
-            FunctionDestination(Icons.Default.Link, "Bond Spam", "Запрос сопряжения Bluetooth Classic (Bond flood)", "bond_spam_screen", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Bolt, "BLE Spam", "Phát tín hiệu kết nối BLE (Apple, Android, Windows, Samsung)", "ble_spam_screen", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Link, "Bond Spam", "Kiểm thử ghép nối Bluetooth Classic (Bond flood)", "bond_spam_screen", OtherSections.BLUETOOTH),
             FunctionDestination(Icons.Default.BluetoothAudio, audioScanTitle, audioScanDesc, "other/audio_scanner", OtherSections.BLUETOOTH),
             FunctionDestination(Icons.Default.ElectricScooter, scooterTitle, scooterDesc, "other/scooter_hack", OtherSections.BLUETOOTH),
             FunctionDestination(Icons.Default.Bluetooth, "NRF Scanner", nrfDesc, "other/nrf_scanner", OtherSections.BLUETOOTH),
@@ -97,7 +98,7 @@ fun functionDestinationSections(): List<Pair<String, List<FunctionDestination>>>
         sections += OtherSections.OTHER to listOf(
             FunctionDestination(Icons.Outlined.Nfc, nfcTitle, nfcDesc, "other/nfc_tools", OtherSections.OTHER),
             FunctionDestination(Icons.Default.QrCodeScanner, qrTitle, qrDesc, "other/qr_tools", OtherSections.OTHER),
-            FunctionDestination(Icons.Filled.WifiOff, "WI-FI Attacks", netHubDesc, "other/network_diagnostic_hub", OtherSections.OTHER),
+            FunctionDestination(Icons.Filled.WifiOff, netHubTitle, netHubDesc, "other/network_diagnostic_hub", OtherSections.OTHER),
             FunctionDestination(Icons.Default.Cast, tvCastTitle, tvCastDesc, "other/smarttv_cast", OtherSections.OTHER),
             FunctionDestination(Icons.Default.Router, lanTitle, lanDesc, "other/lan_scanner", OtherSections.OTHER),
         ) + plugins(OtherSections.OTHER)
