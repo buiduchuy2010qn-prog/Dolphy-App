@@ -41,7 +41,7 @@ android {
 
             isMinifyEnabled = false
             isShrinkResources = false
-            isDebuggable = true
+            isDebuggable = false
 
         }
         release {

@@ -540,6 +540,7 @@ class MainActivity : ComponentActivity() {
         PluginRuntimeAccess.attach(this)
         PluginManager.dispatchEvent("activity_create", this)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableHighRefreshRate()
         window.statusBarColor = android.graphics.Color.BLACK
         window.navigationBarColor = android.graphics.Color.BLACK
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -638,8 +639,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun enableHighRefreshRate() {
+        runCatching {
+            val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+            val modes = currentDisplay.supportedModes
+            val currentMode = currentDisplay.mode
+            val bestMode = modes
+                .filter { it.physicalWidth == currentMode.physicalWidth && it.physicalHeight == currentMode.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+                ?: modes.maxByOrNull { it.refreshRate }
+            if (bestMode != null && bestMode.modeId != window.attributes.preferredDisplayModeId) {
+                val params = window.attributes
+                params.preferredDisplayModeId = bestMode.modeId
+                window.attributes = params
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        enableHighRefreshRate()
         UsbIrManager.scanDevices()
     }
 
@@ -2489,6 +2513,12 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
             ),
         contentAlignment = Alignment.Center
     ) {
+        val cachedTintFilter = remember(accent) {
+            ColorFilter.tint(
+                color = accent.copy(alpha = 0.58f),
+                blendMode = BlendMode.Modulate
+            )
+        }
         if (frameBitmap != null) {
             Image(
                 bitmap = frameBitmap,
@@ -2497,10 +2527,7 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
                     .fillMaxWidth()
                     .aspectRatio(2f),
                 contentScale = ContentScale.Fit,
-                colorFilter = ColorFilter.tint(
-                    color = accent.copy(alpha = 0.58f),
-                    blendMode = BlendMode.Modulate
-                )
+                colorFilter = cachedTintFilter
             )
         }
     }
@@ -6156,7 +6183,7 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     val appPinCode: StateFlow<String> = _appPinCode
     private val _cyclicDolphinAnimationEnabled = MutableStateFlow(prefs.getBoolean("cyclic_dolphin_animation_enabled", false))
     val cyclicDolphinAnimationEnabled: StateFlow<Boolean> = _cyclicDolphinAnimationEnabled
-    private val _quickStartupEnabled = MutableStateFlow(prefs.getBoolean("quick_startup_enabled", false))
+    private val _quickStartupEnabled = MutableStateFlow(prefs.getBoolean("quick_startup_enabled", true))
     val quickStartupEnabled: StateFlow<Boolean> = _quickStartupEnabled
     private val _performanceModeEnabled = MutableStateFlow(prefs.getBoolean("performance_mode_enabled", false))
     val performanceModeEnabled: StateFlow<Boolean> = _performanceModeEnabled

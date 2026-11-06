@@ -30,21 +30,28 @@ fun TintedFrameAnimation(
 
     LaunchedEffect(frames, frameDelayMs) {
         if (frames.size <= 1) return@LaunchedEffect
+        val safeDelay = frameDelayMs.coerceAtLeast(16L)
         while (true) {
-            delay(frameDelayMs.coerceAtLeast(1L))
+            delay(safeDelay)
             frameIndex = (frameIndex + 1) % frames.size
+        }
+    }
+
+    val defaultFilter = remember(tintColor, tintAlpha) {
+        if (tintColor != Color.Unspecified) {
+            ColorFilter.tint(
+                color = tintColor.copy(alpha = tintAlpha),
+                blendMode = BlendMode.Modulate
+            )
+        } else {
+            null
         }
     }
 
     val currentFilter = if (frameFilters != null && frameIndex < frameFilters.size) {
         frameFilters[frameIndex]
-    } else if (tintColor != Color.Unspecified) {
-        ColorFilter.tint(
-            color = tintColor.copy(alpha = tintAlpha),
-            blendMode = BlendMode.Modulate
-        )
     } else {
-        null
+        defaultFilter
     }
 
     Image(
@@ -54,4 +61,3 @@ fun TintedFrameAnimation(
         colorFilter = currentFilter
     )
 }
-

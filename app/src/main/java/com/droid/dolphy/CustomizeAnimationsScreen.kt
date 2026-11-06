@@ -74,14 +74,22 @@ data class ExternalAnimationMeta(
 
 internal var sessionExternalDolphinAnimationName: String? = null
 
+private val FRAME_NUM_REGEX = Regex("""frame_(\d+)\.png""")
+private val FRAME_RATE_REGEX = Regex("""(?im)^Frame rate:\s*(\d+)""")
+private val DURATION_REGEX = Regex("""(?im)^Duration:\s*(\d+)""")
+
 object DolphinAnimationCache {
     private val frameCache = ConcurrentHashMap<String, ImageBitmap>()
+    internal val metaCache = ConcurrentHashMap<String, List<ExternalAnimationMeta>>()
 
     fun getOrDecodeFrame(context: Context, framePath: String): ImageBitmap? {
         frameCache[framePath]?.let { return it }
         return runCatching {
             context.assets.open(framePath).use { stream ->
                 BitmapFactory.decodeStream(stream)?.asImageBitmap()?.also {
+                    if (frameCache.size > 320) {
+                        frameCache.clear()
+                    }
                     frameCache[framePath] = it
                 }
             }
@@ -90,7 +98,7 @@ object DolphinAnimationCache {
 }
 
 fun frameNumberFromName(fileName: String): Int {
-    return Regex("""frame_(\d+)\.png""")
+    return FRAME_NUM_REGEX
         .find(fileName)
         ?.groupValues
         ?.getOrNull(1)
@@ -146,11 +154,12 @@ suspend fun loadExternalAnimationMeta(
     context: Context,
     root: String,
 ): List<ExternalAnimationMeta> {
+    DolphinAnimationCache.metaCache[root]?.let { return it }
     val manifestText = runCatching {
         context.assets.open("$root/manifest.txt").bufferedReader().use { it.readText() }
     }.getOrNull() ?: return emptyList()
     val rows = parseManifestRows(manifestText)
-    return rows.mapNotNull { row ->
+    val loaded = rows.mapNotNull { row ->
         val folderPath = "$root/${row.name}"
         val frames = context.assets.list(folderPath)
             ?.filter { it.startsWith("frame_") && it.endsWith(".png") }
@@ -161,9 +170,9 @@ suspend fun loadExternalAnimationMeta(
         val metaText = runCatching {
             context.assets.open("$folderPath/meta.txt").bufferedReader().use { it.readText() }
         }.getOrNull().orEmpty()
-        val frameRate = Regex("""(?im)^Frame rate:\s*(\d+)""")
+        val frameRate = FRAME_RATE_REGEX
             .find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 2
-        val duration = Regex("""(?im)^Duration:\s*(\d+)""")
+        val duration = DURATION_REGEX
             .find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 20
         ExternalAnimationMeta(
             name = row.name,
@@ -178,6 +187,10 @@ suspend fun loadExternalAnimationMeta(
             frames = frames,
         )
     }
+    if (loaded.isNotEmpty()) {
+        DolphinAnimationCache.metaCache[root] = loaded
+    }
+    return loaded
 }
 
 @Composable
