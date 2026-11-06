@@ -33,10 +33,17 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build Dolphy VN APK
+      - name: Build Dolphy VN APK (Fixed Keystore & Auto-Increment Version)
         run: |
+          mkdir -p ~/.android
+          rm -f ~/.android/debug.keystore app/dolphy-vn-fixed.p12 app/dolphy-vn-fixed.jks
+          openssl pkcs12 -export -in app/dolphy-vn-cert.pem -inkey app/dolphy-vn-key.pem -out app/dolphy-vn-fixed.p12 -name androiddebugkey -passout pass:android
+          keytool -importkeystore -srckeystore app/dolphy-vn-fixed.p12 -srcstoretype PKCS12 -srcstorepass android -destkeystore ~/.android/debug.keystore -deststoretype JKS -deststorepass android -destkeypass android -noprompt
+          cp ~/.android/debug.keystore app/dolphy-vn-fixed.jks
+          rm -f app/dolphy-vn-fixed.p12
           rm -rf app/src/main/assets/Flipper-IRDB-main/.github app/src/main/assets/Flipper-IRDB-main/.fff-ir-lint.json app/src/main/assets/Flipper-IRDB-main/.gitattributes app/src/main/assets/Flipper-IRDB-main/.gitignore || true
           java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.8.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.7.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.6.apk
 
@@ -44,25 +51,25 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Dolphy-VN-APK
-          path: Dolphy-VN-v2.7.apk
+          path: Dolphy-VN-v2.8.apk
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v2.7-vn"
+          TAG="v2.8-vn"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" Dolphy-VN-v2.7.apk --clobber
+            gh release upload "$TAG" Dolphy-VN-v2.8.apk --clobber
           else
-            gh release create "$TAG" Dolphy-VN-v2.7.apk \
-              --title "Dolphy VN v2.7 (Bản Nâng Cấp Toàn Diện - Tiếng Việt & English)" \
-              --notes "### Bản nâng cấp Dolphy VN v2.7 (Full Upgrade Edition)
-          - **Bảng Điều Khiển Thiết bị LAN & Router chuyên sâu**: Chạm vào bất kỳ thiết bị nào trong mục Quét LAN để mở bảng công cụ: Đo Ping trực tiếp, Quét sâu 25 cổng dịch vụ, Đánh thức máy tính từ xa (Wake-on-LAN), Sao chép IP/MAC, Mở Web quản trị và Bảng điều khiển Router.
-          - **Nhận diện MAC & Hãng sản xuất thế hệ mới (Android 10–15)**: Bổ sung cơ chế đọc bảng láng giềng hệ thống (\`ip neigh\`) và từ điển thiết bị tại Việt Nam (Viettel, VNPT iGate, FPT, TP-Link, Mercusys, Ruijie, MikroTik, Ezviz, Imou, Espressif ESP32...).
-          - **Bảng Thông số Wi-Fi Thời gian thực & Đo Ping Nhanh**: Hiển thị trực tiếp cường độ sóng dBm, tốc độ Mbps, băng tần 2.4G/5G + Kênh sóng (Channel), chuẩn bảo mật WPA2/WPA3 và đo độ trễ đồng thời tới Router / DNS 1.1.1.1 / 8.8.8.8.
-          - **Chế độ Ngụy trang Biểu tượng Màn hình chính (Cloak Mode)**: Đổi icon và tên ngoài màn hình chính thành **Dolphy VN**, **Máy tính** hoặc **Ghi chú** ngay trong Cài đặt.
-          - **Khóa bảo mật bằng Mã PIN (App PIN Lock)**: Đặt mã PIN 4–8 số bảo vệ ứng dụng khi khởi động.
-          - **Tối ưu hóa dung lượng APK**: Loại bỏ thư viện giả lập x86 thừa, giúp APK nhẹ và cài đặt nhanh hơn."
+            gh release create "$TAG" Dolphy-VN-v2.8.apk \
+              --title "Dolphy VN v2.8 (Siêu Mượt 120Hz + Dò Tên Thiết Bị LAN 7 Tầng + Cài Đè Vĩnh Viễn)" \
+              --notes "### Bản nâng cấp Dolphy VN v2.8 (Ultra-Smooth 120Hz & Real LAN Device Identity)
+          - **Chứng chỉ ký cố định (Fixed Keystore) & Tự động tăng VersionCode**: Từ bản v2.8 trở đi, mọi bản cập nhật đều dùng chung 1 chữ ký cố định và tự động tăng mã phiên bản, hỗ trợ cài đè 100% không bao giờ bị xung đột gói.
+          - **Dò Tên Thiết Bị Thực 7 Tầng (LAN Scanner)**: Truy vấn trực tiếp DNS Ngược của Router (\`.1:53\`), NetBIOS (\`UDP 137\`), mDNS (\`5353\`), XML \`<friendlyName>\` của UPnP/SSDP và Google Cast (\`8008\`). Hỗ trợ đặt tên ghi nhớ (\`✏️\`) và nút 1 chạm **Chép MAC/IP & Mở Router để Chặn (Kick)**.
+          - **Siêu Mượt 120Hz (High Refresh Rate)**: Kích hoạt tần số quét cao nhất của màn hình, tắt Compose Live Literals (\`isDebuggable = false\`), loại bỏ 200% GPU Overdraw và đệm RAM cho Animation."
+          fi
+          if gh release view "v2.7-vn" >/dev/null 2>&1; then
+            gh release upload "v2.7-vn" Dolphy-VN-v2.7.apk --clobber
           fi
           if gh release view "v2.6-vn" >/dev/null 2>&1; then
             gh release upload "v2.6-vn" Dolphy-VN-v2.6.apk --clobber

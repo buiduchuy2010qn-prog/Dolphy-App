@@ -21,8 +21,8 @@ android {
         applicationId = "com.droid.dolphy"
         minSdk = 26
         targetSdk = 36
-        versionCode = 27
-        versionName = "2.7-VN"
+        versionCode = 280 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
+        versionName = "2.8-VN"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -35,6 +35,18 @@ android {
 
     }
 
+
+        signingConfigs {
+        getByName("debug") {
+            val fixedJks = file("dolphy-vn-fixed.jks")
+            if (fixedJks.exists()) {
+                storeFile = fixedJks
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
 
     buildTypes {
         debug {
