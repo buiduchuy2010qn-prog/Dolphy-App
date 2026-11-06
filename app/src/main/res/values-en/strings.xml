@@ -1,7 +1,7 @@
 <resources>
     <string name="ble_plugin_modes">Plugins</string>
     
-    <string name="app_name">Dolphy</string>
+    <string name="app_name">Dolphy VN</string>
     
     
     <string name="nav_bluetooth">Bluetooth</string>

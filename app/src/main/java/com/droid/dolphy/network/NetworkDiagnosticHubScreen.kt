@@ -1123,6 +1123,9 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                     }
                 }
 
+                var quickPingResult by remember { mutableStateOf<String?>(null) }
+                var quickPingRunning by remember { mutableStateOf(false) }
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1130,17 +1133,130 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                     verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing),
                     contentPadding = PaddingValues(bottom = 20.dp, top = 8.dp),
                 ) {
+                    item(key = "live_wifi_telemetry") {
+                        val isVi = AppLocale.isVietnamese(context)
+                        val connInfo = runCatching { wifiManager.connectionInfo }.getOrNull()
+                        val activeSsidName = currentSsid() ?: (if (isVi) "Chưa kết nối Wi-Fi" else "Not connected")
+                        val localIpStr = getHubLocalIpv4() ?: "—"
+                        val gwIpStr = getGatewayIpAddress(context) ?: "—"
+                        val dnsStr = getDhcpDnsServers(context).joinToString(", ").ifBlank { "—" }
+                        val linkMbps = connInfo?.linkSpeed?.takeIf { it > 0 }?.let { "$it Mbps" } ?: "—"
+                        val rssiDbm = connInfo?.rssi?.takeIf { it > -127 && it < 0 }?.let { "$it dBm" } ?: "—"
+
+                        MaterialCard(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            cornerRadius = 18.dp,
+                            contentPadding = 16.dp
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = activeSsidName,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "$rssiDbm • $linkMbps",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = "IP: $localIpStr  •  Gateway: $gwIpStr\nDNS: $dnsStr",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (quickPingResult != null) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = quickPingResult!!,
+                                            modifier = Modifier.padding(10.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilledTonalButton(
+                                        enabled = !quickPingRunning,
+                                        onClick = {
+                                            quickPingRunning = true
+                                            quickPingResult = if (isVi) "Đang đo độ trễ Gateway & DNS..." else "Measuring Gateway & DNS latency..."
+                                            scope.launch(Dispatchers.IO) {
+                                                fun measureTcpOrIcmp(host: String, port: Int): String {
+                                                    val t0 = System.nanoTime()
+                                                    val ok = runCatching {
+                                                        Socket().use { s ->
+                                                            s.connect(InetSocketAddress(host, port), 1200)
+                                                            true
+                                                        }
+                                                    }.getOrElse {
+                                                        runCatching { InetAddress.getByName(host).isReachable(1200) }.getOrDefault(false)
+                                                    }
+                                                    val ms = (System.nanoTime() - t0) / 1_000_000L
+                                                    return if (ok) "${ms}ms" else "Timeout"
+                                                }
+                                                val gwMs = if (gwIpStr != "—") measureTcpOrIcmp(gwIpStr, 80) else "N/A"
+                                                val cfMs = measureTcpOrIcmp("1.1.1.1", 53)
+                                                val ggMs = measureTcpOrIcmp("8.8.8.8", 53)
+                                                withContext(Dispatchers.Main) {
+                                                    quickPingRunning = false
+                                                    quickPingResult = "Router: $gwMs  •  1.1.1.1: $cfMs  •  8.8.8.8: $ggMs"
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(if (isVi) "Đo Ping Nhanh" else "Quick Ping", maxLines = 1)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { navController.navigate("other/lan_scanner_run") },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(if (isVi) "Quét Thiết Bị LAN" else "LAN Scanner", maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     m3SegmentedItems(networks.toList()) { index, count, network ->
                         val active = network.isActive
                         val tint = if (active) MaterialTheme.colorScheme.primary else Color(0xFFD32F2F)
+                        val bandLabel = when {
+                            network.frequencyMhz in 2400..2500 -> "2.4G CH ${(network.frequencyMhz - 2407) / 5}"
+                            network.frequencyMhz in 5000..5900 -> "5G CH ${(network.frequencyMhz - 5000) / 5}"
+                            else -> "${network.frequencyMhz} MHz"
+                        }
+                        val secLabel = when {
+                            network.capabilities?.contains("WPA3") == true -> "WPA3"
+                            network.capabilities?.contains("WPA2") == true -> "WPA2"
+                            network.capabilities?.contains("WPA") == true -> "WPA"
+                            network.capabilities?.contains("WEP") == true -> "WEP"
+                            else -> "Open"
+                        }
                         M3SegmentedListItem(
                             index = index,
                             count = count,
                             headline = network.ssid,
                             supporting = if (active) {
-                                stringResource(R.string.network_hub_active_pinned)
+                                "${stringResource(R.string.network_hub_active_pinned)} • $bandLabel • $secLabel • ${network.level} dBm"
                             } else {
-                                "${network.frequencyMhz} MHz • ${network.level} dBm"
+                                "$bandLabel • $secLabel • ${network.level} dBm"
                             },
                             leadingIcon = Icons.Default.Wifi,
                             leadingIconTint = tint,
@@ -1674,13 +1790,13 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                     modifier = Modifier.size(48.dp)
                                 )
                                 Text(
-                                    text = "No Wi-Fi connection",
+                                    text = if (AppLocale.isVietnamese(context)) "Chưa kết nối Wi-Fi" else "No Wi-Fi connection",
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.error
                                 )
                                 Text(
-                                    text = "Connect to a Wi-Fi network first",
+                                    text = if (AppLocale.isVietnamese(context)) "Hãy kết nối vào mạng Wi-Fi trước" else "Connect to a Wi-Fi network first",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -2163,26 +2279,7 @@ private fun getHubLocalIpv4(): String? {
 }
 
 private fun readArpTable(): List<Pair<String, String>> {
-    val out = mutableListOf<Pair<String, String>>()
-    try {
-        BufferedReader(FileReader("/proc/net/arp")).use { reader ->
-            reader.readLine()
-            var line = reader.readLine()
-            while (line != null) {
-                val parts = line.trim().split(Regex("\\s+"))
-                if (parts.size >= 4) {
-                    val ip = parts[0]
-                    val mac = parts[3].uppercase(Locale.US)
-                    if (mac.matches(Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$")) && mac != "00:00:00:00:00:00") {
-                        out += ip to mac
-                    }
-                }
-                line = reader.readLine()
-            }
-        }
-    } catch (_: Exception) {
-    }
-    return out
+    return readSystemNeighborTable().map { it.key to it.value }
 }
 
 private fun quickPortOpen(ip: String, port: Int, timeoutMs: Int): Boolean {

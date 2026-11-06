@@ -2,7 +2,7 @@
 <resources>
     <string name="ble_plugin_modes">Плагины</string>
     <string name="advertise_empty_presets">Вы пока не добавили ни одного устройства.</string>
-    <string name="app_name">Dolphy</string>
+    <string name="app_name">Dolphy VN</string>
     <string name="nav_modules">Функции</string>
     <string name="settings_personalisation">Персонализация</string>
     <string name="settings_functions_menu_view">Вид меню функций</string>

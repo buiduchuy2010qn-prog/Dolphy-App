@@ -615,9 +615,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val appPinCode by spamViewModel.appPinCode.collectAsState()
+                val customAppTitle by spamViewModel.customAppTitle.collectAsState()
+                val appLanguage by spamViewModel.appLanguage.collectAsState()
+                var pinUnlocked by rememberSaveable { mutableStateOf(false) }
+
                 if (showSplash) {
                     SplashScreen(
                         onSplashComplete = { showSplash = false }
+                    )
+                } else if (appPinCode.isNotBlank() && !pinUnlocked) {
+                    AppPinLockScreen(
+                        expectedPin = appPinCode,
+                        appTitle = customAppTitle,
+                        isVi = appLanguage == "vi",
+                        onUnlocked = { pinUnlocked = true }
                     )
                 } else {
                     MainScreen(spamViewModel, dolphyViewModel, nfcViewModel, pendingNavRoute, pendingPluginUri)
@@ -2938,6 +2950,122 @@ fun PluginSystemWarningDialog(onConfirm: () -> Unit) {
 }
 
 @Composable
+fun AppPinLockScreen(
+    expectedPin: String,
+    appTitle: String,
+    isVi: Boolean,
+    onUnlocked: () -> Unit
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    var enteredPin by remember { mutableStateOf("") }
+    var hasError by remember { mutableStateOf(false) }
+
+    MaterialBackground(accentColor = accent) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            MaterialCard(
+                modifier = Modifier.fillMaxWidth(),
+                accentColor = accent,
+                cornerRadius = 28.dp,
+                contentPadding = 24.dp
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Text(
+                        text = appTitle,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (hasError) {
+                            if (isVi) "Mã PIN không đúng, vui lòng thử lại!" else "Incorrect PIN, please try again!"
+                        } else {
+                            if (isVi) "Nhập mã PIN để mở khóa ứng dụng" else "Enter PIN to unlock app"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (enteredPin.isEmpty()) "• • • •" else "• ".repeat(enteredPin.length).trim(),
+                            modifier = Modifier.padding(vertical = 14.dp),
+                            style = MaterialTheme.typography.headlineMedium,
+                            textAlign = TextAlign.Center,
+                            color = accent,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    val rows = listOf(
+                        listOf("1", "2", "3"),
+                        listOf("4", "5", "6"),
+                        listOf("7", "8", "9"),
+                        listOf("C", "0", "⌫")
+                    )
+                    rows.forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            row.forEach { key ->
+                                FilledTonalButton(
+                                    onClick = {
+                                        hasError = false
+                                        when (key) {
+                                            "C" -> enteredPin = ""
+                                            "⌫" -> if (enteredPin.isNotEmpty()) enteredPin = enteredPin.dropLast(1)
+                                            else -> {
+                                                if (enteredPin.length < 8) {
+                                                    enteredPin += key
+                                                    if (enteredPin == expectedPin) {
+                                                        onUnlocked()
+                                                    } else if (enteredPin.length >= expectedPin.length) {
+                                                        hasError = true
+                                                        enteredPin = ""
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(54.dp),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Text(
+                                        text = key,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewModel, navController: NavController) {
     val bottomScrollPadding = 180.dp
     val isDarkTheme by spamViewModel.isDarkTheme.collectAsState()
@@ -2958,8 +3086,82 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     val uriHandler = LocalUriHandler.current
     val appLanguage by spamViewModel.appLanguage.collectAsState()
     val customAppTitle by spamViewModel.customAppTitle.collectAsState()
+    val launcherCloakMode by spamViewModel.launcherCloakMode.collectAsState()
+    val appPinCode by spamViewModel.appPinCode.collectAsState()
     var showAppRenameDialog by remember { mutableStateOf(false) }
     var appRenameInput by remember(customAppTitle) { mutableStateOf(customAppTitle) }
+    var showPinSetupDialog by remember { mutableStateOf(false) }
+    var pinInput by remember(appPinCode) { mutableStateOf(appPinCode) }
+
+    if (showPinSetupDialog) {
+        val isVi = appLanguage == "vi"
+        AlertDialog(
+            onDismissRequest = { showPinSetupDialog = false },
+            title = { Text(if (isVi) "Khóa ứng dụng bằng Mã PIN" else "App PIN Lock") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        if (isVi) "Nhập mã PIN số (từ 4 đến 8 chữ số) để bảo vệ ứng dụng khi mở. Để trống và bấm Lưu nếu muốn tắt khóa PIN:"
+                        else "Enter a 4–8 digit numeric PIN to lock the app on startup. Leave blank and Save to disable:"
+                    )
+                    OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = { value ->
+                            pinInput = value.filter { it.isDigit() }.take(8)
+                        },
+                        singleLine = true,
+                        label = { Text(if (isVi) "Mã PIN (4–8 số)" else "PIN Code (4–8 digits)") },
+                        placeholder = { Text("1234") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (pinInput.isBlank() || pinInput.length >= 4) {
+                            spamViewModel.setAppPinCode(pinInput)
+                            showPinSetupDialog = false
+                            Toast.makeText(
+                                context,
+                                if (pinInput.isBlank()) {
+                                    if (isVi) "Đã tắt khóa mã PIN" else "App PIN lock disabled"
+                                } else {
+                                    if (isVi) "Đã bật khóa mã PIN" else "App PIN lock enabled"
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                if (isVi) "Mã PIN phải có ít nhất 4 chữ số" else "PIN must be at least 4 digits",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                ) {
+                    Text(if (isVi) "Lưu cài đặt" else "Save")
+                }
+            },
+            dismissButton = {
+                if (appPinCode.isNotBlank()) {
+                    TextButton(
+                        onClick = {
+                            spamViewModel.setAppPinCode("")
+                            pinInput = ""
+                            showPinSetupDialog = false
+                        }
+                    ) {
+                        Text(if (isVi) "Tắt khóa PIN" else "Disable PIN")
+                    }
+                } else {
+                    TextButton(onClick = { showPinSetupDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            }
+        )
+    }
 
     if (showAppRenameDialog) {
         val isVi = appLanguage == "vi"
@@ -3045,7 +3247,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                 Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
                     M3SegmentedListSectionHeader(title = stringResource(R.string.settings_general).uppercase())
 
-                    val generalItems = 5
+                    val generalItems = 7
 
 
                     MaterialCard(
@@ -3116,12 +3318,89 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         }
                     }
 
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(2, generalItems),
+                        contentPadding = 16.dp,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Apps, null, tint = accentColor, modifier = Modifier.size(22.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        if (appLanguage == "vi") "Biểu tượng màn hình chính (Ngụy trang)" else "Home Screen Icon (Cloak Mode)",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        if (appLanguage == "vi") "Đổi icon & tên ngoài màn hình điện thoại" else "Change launcher icon & label on home screen",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            val cloakOptions = listOf(
+                                "Dolphy VN" to "default",
+                                (if (appLanguage == "vi") "Máy tính" else "Calculator") to "calculator",
+                                (if (appLanguage == "vi") "Ghi chú" else "Notes") to "notes"
+                            )
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                cloakOptions.forEachIndexed { idx, (label, mode) ->
+                                    SegmentedButton(
+                                        selected = launcherCloakMode == mode,
+                                        onClick = {
+                                            spamViewModel.setLauncherCloakMode(mode)
+                                            Toast.makeText(
+                                                context,
+                                                if (appLanguage == "vi") "Đã đổi biểu tượng màn hình chính: $label" else "Changed home icon: $label",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        },
+                                        shape = SegmentedButtonDefaults.itemShape(idx, cloakOptions.size),
+                                        label = { Text(label, maxLines = 1) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(3, generalItems),
+                        contentPadding = 0.dp,
+                    ) {
+                        SettingsItem(onClick = { showPinSetupDialog = true }) {
+                            Icon(Icons.Default.Lock, null, tint = accentColor, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (appLanguage == "vi") "Khóa ứng dụng bằng Mã PIN" else "App PIN Lock",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    if (appPinCode.isNotBlank()) {
+                                        if (appLanguage == "vi") "Đang bật (${appPinCode.length} chữ số)" else "Enabled (${appPinCode.length} digits)"
+                                    } else {
+                                        if (appLanguage == "vi") "Đang tắt (Chạm để đặt mã PIN)" else "Disabled (Tap to set PIN)"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (appPinCode.isNotBlank()) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (appPinCode.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
 
                     val quickStartupEnabled by spamViewModel.quickStartupEnabled.collectAsState()
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(2, generalItems),
+                        shape = getSegmentedShape(4, generalItems),
                         contentPadding = 0.dp
                     ) {
                         Row(
@@ -3150,7 +3429,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(3, generalItems),
+                        shape = getSegmentedShape(5, generalItems),
                         contentPadding = 0.dp,
                     ) {
                         SettingsItem(onClick = { navController.navigate("plugin_manager") }) {
@@ -3172,7 +3451,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(4, generalItems),
+                        shape = getSegmentedShape(6, generalItems),
                         contentPadding = 0.dp
                     ) {
                         Row(
@@ -5871,6 +6150,10 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     val appLanguage: StateFlow<String> = _appLanguage
     private val _customAppTitle = MutableStateFlow(prefs.getString("custom_app_title", "Dolphy VN") ?: "Dolphy VN")
     val customAppTitle: StateFlow<String> = _customAppTitle
+    private val _launcherCloakMode = MutableStateFlow(prefs.getString("launcher_cloak_mode", "default") ?: "default")
+    val launcherCloakMode: StateFlow<String> = _launcherCloakMode
+    private val _appPinCode = MutableStateFlow(prefs.getString("app_pin_code", "") ?: "")
+    val appPinCode: StateFlow<String> = _appPinCode
     private val _cyclicDolphinAnimationEnabled = MutableStateFlow(prefs.getBoolean("cyclic_dolphin_animation_enabled", false))
     val cyclicDolphinAnimationEnabled: StateFlow<Boolean> = _cyclicDolphinAnimationEnabled
     private val _quickStartupEnabled = MutableStateFlow(prefs.getBoolean("quick_startup_enabled", false))
@@ -6104,6 +6387,43 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
         val cleaned = title.trim().ifBlank { "Dolphy VN" }
         prefs.edit { putString("custom_app_title", cleaned) }
         _customAppTitle.value = cleaned
+    }
+
+    fun setAppPinCode(pin: String) {
+        val cleaned = pin.filter { it.isDigit() }.take(8)
+        prefs.edit { putString("app_pin_code", cleaned) }
+        _appPinCode.value = cleaned
+    }
+
+    fun setLauncherCloakMode(mode: String) {
+        val normalized = when (mode) {
+            "calculator" -> "calculator"
+            "notes" -> "notes"
+            else -> "default"
+        }
+        prefs.edit { putString("launcher_cloak_mode", normalized) }
+        _launcherCloakMode.value = normalized
+        val pm = application.packageManager
+        val pkg = application.packageName
+        val aliases = mapOf(
+            "default" to "$pkg.LauncherDefault",
+            "calculator" to "$pkg.LauncherCalculator",
+            "notes" to "$pkg.LauncherNotes"
+        )
+        aliases.forEach { (key, className) ->
+            val state = if (key == normalized) {
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            } else {
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+            }
+            runCatching {
+                pm.setComponentEnabledSetting(
+                    ComponentName(pkg, className),
+                    state,
+                    PackageManager.DONT_KILL_APP
+                )
+            }
+        }
     }
 
     fun setCyclicDolphinAnimationEnabled(enabled: Boolean) {

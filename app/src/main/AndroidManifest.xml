@@ -36,11 +36,9 @@
     
     <uses-permission android:name="android.permission.TRANSMIT_IR" />
 
-    
     <uses-permission android:name="rikka.shizuku.permission.API_V23" />
     <uses-permission android:name="moe.shizuku.privileged.api.permission.BIND_SHIZUKU_SERVICE" />
 
-    
     <uses-permission android:name="android.permission.TETHER_PRIVILEGED" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
@@ -53,7 +51,6 @@
         <provider android:authorities="moe.shizuku.privileged.api" />
     </queries>
 
-    
     <uses-feature android:name="android.hardware.consumerir" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
@@ -87,7 +84,7 @@
             android:theme="@style/Theme.Dolphy.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             
             <intent-filter>
@@ -95,7 +92,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            
             <intent-filter>
                 <action android:name="android.nfc.action.TECH_DISCOVERED" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -104,7 +100,6 @@
                 android:name="android.nfc.action.TECH_DISCOVERED"
                 android:resource="@xml/nfc_tech_filter" />
 
-            
             <intent-filter>
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -136,7 +131,6 @@
                 <data android:mimeType="application/vnd.wfa.wsc" />
             </intent-filter>
 
-            
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -155,12 +149,54 @@
                 <data android:mimeType="application/x-dolphy-plugin" />
             </intent-filter>
         </activity>
+
+        <activity-alias
+            android:name=".LauncherDefault"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherCalculator"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_cloak_calculator"
+            android:roundIcon="@drawable/ic_cloak_calculator"
+            android:label="Máy tính">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherNotes"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_cloak_notes"
+            android:roundIcon="@drawable/ic_cloak_notes"
+            android:label="Ghi chú">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         
         <activity
             android:name=".hid.HidKeyboardActivity"
             android:exported="false"
             android:launchMode="singleTop"
-            android:label="HID клавиатура"
+            android:label="Bàn phím HID"
             android:theme="@style/Theme.Dolphy" />
 
         <service
@@ -218,6 +254,7 @@
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_LEFT" />
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_RIGHT" />
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_OK" />
+                <action android:name="android.appwidget.action.FLIPPER_WIDGET_BACK" />
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_BACK" />
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_BLE_IOS" />
                 <action android:name="com.droid.dolphy.action.FLIPPER_WIDGET_BLE_SAMSUNG" />
