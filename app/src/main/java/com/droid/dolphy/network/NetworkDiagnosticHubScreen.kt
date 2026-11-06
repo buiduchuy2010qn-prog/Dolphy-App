@@ -1125,6 +1125,27 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
 
                 var quickPingResult by remember { mutableStateOf<String?>(null) }
                 var quickPingRunning by remember { mutableStateOf(false) }
+                var lowLatencyBoostActive by remember { mutableStateOf(false) }
+                val lowLatencyWifiLock = remember {
+                    runCatching {
+                        val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                        } else {
+                            @Suppress("DEPRECATION")
+                            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                        }
+                        wifiManager.createWifiLock(lockMode, "Dolphy:LowLatencyBoost").apply {
+                            setReferenceCounted(false)
+                        }
+                    }.getOrNull()
+                }
+                DisposableEffect(Unit) {
+                    onDispose {
+                        runCatching {
+                            if (lowLatencyWifiLock?.isHeld == true) lowLatencyWifiLock.release()
+                        }
+                    }
+                }
 
                 LazyColumn(
                     modifier = Modifier
@@ -1228,6 +1249,107 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                         modifier = Modifier.weight(1f)
                                     ) {
                                         Text(if (isVi) "Quét Thiết Bị LAN" else "LAN Scanner", maxLines = 1)
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val next = !lowLatencyBoostActive
+                                            lowLatencyBoostActive = next
+                                            runCatching {
+                                                if (next) {
+                                                    lowLatencyWifiLock?.acquire()
+                                                } else if (lowLatencyWifiLock?.isHeld == true) {
+                                                    lowLatencyWifiLock.release()
+                                                }
+                                            }
+                                            quickPingResult = if (next) {
+                                                if (isVi) "⚡ Đã bật Tăng tốc Wi-Fi Độ trễ thấp (Chống ngủ chip Wi-Fi, giảm giật lag)"
+                                                else "⚡ Low-Latency Wi-Fi Boost ON (Wi-Fi power-save disabled)"
+                                            } else {
+                                                if (isVi) "Đã tắt chế độ Tăng tốc Wi-Fi Độ trễ thấp"
+                                                else "Low-Latency Wi-Fi Boost OFF"
+                                            }
+                                        },
+                                        colors = if (lowLatencyBoostActive) {
+                                            androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        } else {
+                                            androidx.compose.material3.ButtonDefaults.filledTonalButtonColors()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            if (lowLatencyBoostActive) {
+                                                if (isVi) "⚡ Đang Tăng Tốc" else "⚡ Boost ON"
+                                            } else {
+                                                if (isVi) "⚡ Tăng Tốc Wi-Fi" else "⚡ Boost Wi-Fi"
+                                            },
+                                            maxLines = 1
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        enabled = !quickPingRunning,
+                                        onClick = {
+                                            quickPingRunning = true
+                                            quickPingResult = if (isVi) "Đang tìm DNS nhanh nhất & phân tích kênh sóng..." else "Benchmarking DNS & Wi-Fi channels..."
+                                            val snapshotNetworks = networks.toList()
+                                            scope.launch(Dispatchers.IO) {
+                                                val dnsCandidates = buildList {
+                                                    if (gwIpStr != "—") add("Router ($gwIpStr)" to gwIpStr)
+                                                    add("Cloudflare (1.1.1.1)" to "1.1.1.1")
+                                                    add("Cloudflare (1.0.0.1)" to "1.0.0.1")
+                                                    add("Google (8.8.8.8)" to "8.8.8.8")
+                                                    add("Quad9 (9.9.9.9)" to "9.9.9.9")
+                                                }
+                                                val dnsScores = dnsCandidates.map { (name, ip) ->
+                                                    val query = buildDnsQuery("example.com", 0x1234)
+                                                    val t0 = System.nanoTime()
+                                                    val ok = runCatching {
+                                                        DatagramSocket().use { sock ->
+                                                            sock.soTimeout = 900
+                                                            val addr = InetAddress.getByName(ip)
+                                                            sock.send(DatagramPacket(query, query.size, addr, 53))
+                                                            val buf = ByteArray(512)
+                                                            sock.receive(DatagramPacket(buf, buf.size))
+                                                            true
+                                                        }
+                                                    }.getOrDefault(false)
+                                                    val ms = if (ok) ((System.nanoTime() - t0) / 1_000_000L) else 9999L
+                                                    name to ms
+                                                }.sortedBy { it.second }
+
+                                                val chCounts = listOf(1, 6, 11).associateWith { ch ->
+                                                    snapshotNetworks.count { net ->
+                                                        net.frequencyMhz in 2400..2500 &&
+                                                            kotlin.math.abs(((net.frequencyMhz - 2407) / 5) - ch) <= 2
+                                                    }
+                                                }
+                                                val bestCh24 = chCounts.minByOrNull { it.value }?.key ?: 6
+                                                val bestDns = dnsScores.firstOrNull { it.second < 9999L }
+
+                                                withContext(Dispatchers.Main) {
+                                                    quickPingRunning = false
+                                                    val dnsLine = dnsScores.filter { it.second < 9999L }
+                                                        .take(3)
+                                                        .joinToString(" • ") { "${it.first}: ${it.second}ms" }
+                                                        .ifBlank { if (isVi) "Không đo được DNS" else "DNS unreachable" }
+                                                    quickPingResult = if (isVi) {
+                                                        "🏆 DNS nhanh nhất: ${bestDns?.let { "${it.first} (${it.second}ms)" } ?: "—"}\n📊 Top DNS: $dnsLine\n📡 Kênh 2.4GHz ít nhiễu nhất: Kênh $bestCh24 (${chCounts[bestCh24]} mạng quanh đây)"
+                                                    } else {
+                                                        "🏆 Fastest DNS: ${bestDns?.let { "${it.first} (${it.second}ms)" } ?: "—"}\n📊 Top DNS: $dnsLine\n📡 Cleanest 2.4GHz channel: CH $bestCh24 (${chCounts[bestCh24]} nearby)"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(if (isVi) "Tối Ưu DNS/Kênh" else "Optimize DNS", maxLines = 1)
                                     }
                                 }
                             }
