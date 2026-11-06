@@ -43,34 +43,34 @@ jobs:
           rm -f app/dolphy-vn-fixed.p12
           rm -rf app/src/main/assets/Flipper-IRDB-main/.github app/src/main/assets/Flipper-IRDB-main/.fff-ir-lint.json app/src/main/assets/Flipper-IRDB-main/.gitattributes app/src/main/assets/Flipper-IRDB-main/.gitignore || true
           java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v3.0.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.9.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.8.apk
-          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.7.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Dolphy-VN-APK
-          path: Dolphy-VN-v2.9.apk
+          path: Dolphy-VN-v3.0.apk
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v2.9-vn"
+          TAG="v3.0-vn"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" Dolphy-VN-v2.9.apk --clobber
+            gh release upload "$TAG" Dolphy-VN-v3.0.apk --clobber
           else
-            gh release create "$TAG" Dolphy-VN-v2.9.apk \
-              --title "Dolphy VN v2.9 (Dò Tên Thiết Bị LAN 9 Tầng + Sửa Quét Sót + Cập Nhật OTA Trực Tiếp)" \
-              --notes "### Bản nâng cấp Dolphy VN v2.9 (9-Layer Real Device Name & In-App OTA)
-          - **Dò Tên Thiết Bị 9 Tầng trong cả Kiểm thử Wi-Fi (Lab) & Quét LAN**: Lấy chính xác tên người dùng đặt hoặc tên dòng máy gốc qua DNS Ngược Router (\`.1:53\` DHCP Hostname), mDNS/Bonjour (\`5353\`), AirPlay \`/info\` (nhận diện đời iPhone/iPad), Google Cast (\`8008\`), UPnP XML \`<friendlyName>\` và NetBIOS (\`UDP 137\`).
-          - **Sửa triệt để lỗi chỉ quét thấy 1 thiết bị (Gateway)**: Ưu tiên dải mạng Wi-Fi (\`wlan0\`) thay vì nhầm sang mạng 4G LTE (\`VoLTE\`), bổ sung gói đánh thức ARP (\`UDP Warmup\`) và quét theo lô 32 IP chống nghẽn luồng.
-          - **Cập nhật OTA trực tiếp trong ứng dụng**: Kiểm tra bản mới ngay khi mở app hoặc trong **Cài đặt -> Kiểm tra cập nhật (OTA)**, hiển thị dung lượng MB đang tải và cài đè 100% không xung đột."
+            gh release create "$TAG" Dolphy-VN-v3.0.apk \
+              --title "Dolphy VN v3.0 (Tự Động Xóa APK Sau Khi Cài OTA + Dò Tên LAN 9 Tầng + 120Hz)" \
+              --notes "### Bản nâng cấp Dolphy VN v3.0 (Auto-Clean OTA APK & 9-Layer LAN Identity)
+          - **Tự động xóa file APK sau khi cài đặt OTA**: Ngay sau khi cài đặt bản cập nhật OTA và mở lại ứng dụng, hệ thống tự động xóa file \`.apk\` tạm trong bộ nhớ đệm (\`cacheDir/ota\`), giải phóng ngay ~61 MB bộ nhớ máy và thông báo số MB đã dọn.
+          - **Dò Tên Thiết Bị 9 Tầng trong cả Kiểm thử Wi-Fi (Lab) & Quét LAN**: Lấy chính xác tên người dùng đặt hoặc tên dòng máy gốc qua DNS Ngược Router (\`.1:53\` DHCP Hostname), mDNS/Bonjour (\`5353\`), AirPlay \`/info\`, Google Cast (\`8008\`), UPnP XML \`<friendlyName>\` và NetBIOS (\`UDP 137\`).
+          - **Sửa triệt để lỗi chỉ quét thấy 1 thiết bị (Gateway)**: Ưu tiên dải mạng Wi-Fi (\`wlan0\`) thay vì nhầm sang mạng 4G LTE (\`VoLTE\`), bổ sung gói đánh thức ARP (\`UDP Warmup\`)."
+          fi
+          if gh release view "v2.9-vn" >/dev/null 2>&1; then
+            gh release upload "v2.9-vn" Dolphy-VN-v2.9.apk --clobber
           fi
           if gh release view "v2.8-vn" >/dev/null 2>&1; then
             gh release upload "v2.8-vn" Dolphy-VN-v2.8.apk --clobber
-          fi
-          if gh release view "v2.7-vn" >/dev/null 2>&1; then
-            gh release upload "v2.7-vn" Dolphy-VN-v2.7.apk --clobber
           fi

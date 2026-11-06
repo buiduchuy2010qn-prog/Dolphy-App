@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,7 +80,58 @@ object OtaController {
     private val _state = MutableStateFlow<OtaState>(OtaState.Idle)
     val state: StateFlow<OtaState> = _state
 
+    /**
+     * Automatically deletes any leftover OTA `.apk` or `.part` files in `cacheDir/ota` once installed,
+     * freeing ~61–75 MB of internal storage immediately!
+     */
+    fun cleanupInstalledOtaApks(context: Context, notifyToast: Boolean = true) {
+        if (_state.value is OtaState.Downloading) return
+        scope.launch {
+            val otaDir = File(context.cacheDir, "ota")
+            if (!otaDir.exists()) return@launch
+            val currentVer = currentVersion(context)
+            val readyState = _state.value as? OtaState.ReadyToInstall
+            var freedBytes = 0L
+
+            otaDir.listFiles()?.forEach { f ->
+                // If we are still waiting to install a newer version, keep only that specific file until installed
+                val isPendingNewerInstall = readyState != null &&
+                    readyState.file.absolutePath == f.absolutePath &&
+                    isNewer(readyState.release.tag, currentVer)
+
+                if (!isPendingNewerInstall) {
+                    val len = f.length()
+                    if (runCatching { f.delete() }.getOrDefault(false)) {
+                        freedBytes += len
+                    }
+                }
+            }
+
+            if (readyState != null && !isNewer(readyState.release.tag, currentVer)) {
+                _state.value = OtaState.Idle
+            }
+
+            if (freedBytes > 1024 * 1024 && notifyToast) {
+                val freedMb = freedBytes / (1024.0 * 1024.0)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        if (isVi(context)) {
+                            String.format(Locale.US, "🧹 Đã tự động xóa file APK cập nhật cũ (Giải phóng %.1f MB)", freedMb)
+                        } else {
+                            String.format(Locale.US, "🧹 Deleted old OTA APK file (Freed %.1f MB)", freedMb)
+                        },
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     fun autoCheck(context: Context) {
+        // Always clean up any old downloaded OTA APK files first on app launch!
+        cleanupInstalledOtaApks(context, notifyToast = true)
+
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val last = prefs.getLong(LAST_CHECK, 0L)
         if (System.currentTimeMillis() - last < AUTO_INTERVAL_MS) return
@@ -85,6 +140,7 @@ object OtaController {
 
     fun check(context: Context, manual: Boolean) {
         if (_state.value is OtaState.Checking || _state.value is OtaState.Downloading) return
+        cleanupInstalledOtaApks(context, notifyToast = false)
         scope.launch {
             _state.value = OtaState.Checking
             val current = currentVersion(context)
@@ -126,6 +182,8 @@ object OtaController {
             _state.value = OtaState.Downloading(release, 0f, 0L, release.apkSize)
             runCatching {
                 val dir = File(context.cacheDir, "ota").apply { mkdirs() }
+                // Clean any previous APK/part files before downloading
+                dir.listFiles()?.forEach { runCatching { it.delete() } }
                 val dest = File(dir, release.apkName.ifBlank { "Dolphy-VN-update.apk" })
                 downloadFile(release.apkUrl, dest) { read, total ->
                     val effectiveTotal = if (total > 0) total else release.apkSize
@@ -167,8 +225,12 @@ object OtaController {
         context.startActivity(intent)
     }
 
-    fun dismiss() {
-        if (_state.value !is OtaState.Downloading) {
+    fun dismiss(deleteReadyFile: Boolean = false) {
+        val current = _state.value
+        if (current is OtaState.ReadyToInstall && deleteReadyFile) {
+            runCatching { current.file.delete() }
+        }
+        if (current !is OtaState.Downloading) {
             _state.value = OtaState.Idle
         }
     }
@@ -280,10 +342,21 @@ object OtaController {
 @Composable
 fun OtaUpdateHost(isVi: Boolean) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val state by OtaController.state.collectAsState()
 
     LaunchedEffect(Unit) {
         OtaController.autoCheck(context.applicationContext)
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                OtaController.cleanupInstalledOtaApks(context.applicationContext, notifyToast = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     when (val s = state) {
@@ -330,13 +403,13 @@ fun OtaUpdateHost(isVi: Boolean) {
         is OtaState.ReadyToInstall -> OtaDialog(
             title = if (isVi) "✅ Đã tải xong — Sẵn sàng cài đè" else "✅ Ready to install",
             body = if (isVi)
-                "Gói cập nhật ${s.release.tag} đã tải xong. Bấm «Cài đặt ngay» để cập nhật trực tiếp (không mất dữ liệu)."
+                "Gói cập nhật ${s.release.tag} đã tải xong. Bấm «Cài đặt ngay» để cập nhật trực tiếp (file APK tạm sẽ tự động xóa sau khi cài xong)."
             else
-                "APK ${s.release.tag} downloaded. Tap 'Install Now' to update.",
+                "APK ${s.release.tag} downloaded. Tap 'Install Now' to update (temp APK will be auto-deleted after install).",
             confirm = if (isVi) "Cài đặt ngay" else "Install Now",
-            dismiss = if (isVi) "Đóng" else "Close",
+            dismiss = if (isVi) "Hủy & Xóa APK" else "Cancel & Delete APK",
             onConfirm = { OtaController.installApk(context, s.file) },
-            onDismiss = { OtaController.dismiss() },
+            onDismiss = { OtaController.dismiss(deleteReadyFile = true) },
         )
         is OtaState.Error -> OtaDialog(
             title = if (isVi) "Không kiểm tra được cập nhật" else "Update check failed",
