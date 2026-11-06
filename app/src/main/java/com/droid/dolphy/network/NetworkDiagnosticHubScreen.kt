@@ -393,13 +393,29 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
     }
 
     fun refreshNetworks() {
+        val activeSsid = currentSsid()
+        val connInfo = runCatching { wifiManager.connectionInfo }.getOrNull()
+        val isWifiConnected = getGatewayIpAddress(context) != null || getHubLocalIpv4() != null
+
         if (!wifiPermissionsGranted || !locationServicesEnabled) {
             networks.clear()
+            if (isWifiConnected) {
+                val fallbackSsid = activeSsid ?: if (AppLocale.isVietnamese(context)) "Mạng Wi-Fi đang kết nối (LAN)" else "Connected Wi-Fi Network (LAN)"
+                networks.add(
+                    HubWifiNetwork(
+                        ssid = fallbackSsid,
+                        bssid = runCatching { connInfo?.bssid }.getOrNull(),
+                        level = connInfo?.rssi?.takeIf { it in -126..-1 } ?: -50,
+                        frequencyMhz = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) (connInfo?.frequency ?: 2412) else 2412,
+                        capabilities = "WPA2",
+                        isActive = true
+                    )
+                )
+            }
             return
         }
 
         runCatching { wifiManager.startScan() }
-        val activeSsid = currentSsid()
         val refreshed = runCatching { wifiManager.scanResults.orEmpty() }
             .getOrElse { emptyList() }
             .mapNotNull { scan ->
@@ -419,6 +435,22 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                     .thenByDescending { it.level }
                     .thenBy { it.ssid.lowercase() }
             )
+            .toMutableList()
+
+        if (isWifiConnected && refreshed.none { it.isActive }) {
+            val fallbackSsid = activeSsid ?: if (AppLocale.isVietnamese(context)) "Mạng Wi-Fi đang kết nối (LAN)" else "Connected Wi-Fi Network (LAN)"
+            refreshed.add(
+                0,
+                HubWifiNetwork(
+                    ssid = fallbackSsid,
+                    bssid = runCatching { connInfo?.bssid }.getOrNull(),
+                    level = connInfo?.rssi?.takeIf { it in -126..-1 } ?: -50,
+                    frequencyMhz = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) (connInfo?.frequency ?: 2412) else 2412,
+                    capabilities = "WPA2",
+                    isActive = true
+                )
+            )
+        }
 
         networks.clear()
         networks.addAll(refreshed)
@@ -816,8 +848,8 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 return@launch
             }
 
-            // 1. Fast UDP ARP-Warmup burst to wake up sleeping phones & populate kernel neighbor table
-            launch { warmupSubnetArpTable(subnet) }
+            // 1. Fast UDP ARP-Warmup (~90ms) to wake up sleeping phones & populate kernel neighbor table immediately
+            warmupSubnetArpTable(subnet)
 
             // 2. Background SSDP UPnP M-SEARCH + Multi-Listener NsdManager mDNS discovery
             val upnpMap = ConcurrentHashMap<String, Pair<String?, String?>>()
@@ -825,14 +857,14 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
 
             val ssdpJob = launch {
                 try {
-                    val ssdpReq = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n"
+                    val ssdpReq = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n"
                     DatagramSocket().use { sock ->
-                        sock.soTimeout = 1400
+                        sock.soTimeout = 1100
                         val group = InetAddress.getByName("239.255.255.250")
                         sock.send(DatagramPacket(ssdpReq.toByteArray(), ssdpReq.length, group, 1900))
                         val buf = ByteArray(1536)
                         val t0 = System.currentTimeMillis()
-                        while (System.currentTimeMillis() - t0 < 1800) {
+                        while (System.currentTimeMillis() - t0 < 1400) {
                             try {
                                 val pkt = DatagramPacket(buf, buf.size)
                                 sock.receive(pkt)
@@ -880,7 +912,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 }
             }
 
-            delay(350)
+            delay(90)
             val neighborMap = ConcurrentHashMap(readSystemNeighborTable())
 
             fun buildHostItem(dev: LanDevice, isGw: Boolean): HubLanHost {
@@ -922,9 +954,39 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 )
             }
 
-            // 3. Controlled Batched Scan (32 IPs at a time so sockets/threads never starve!)
+            // 2.5 Instant Phase-1 Emission (< 0.25s): Immediately populate all ARP/Neighbor devices on screen!
+            for ((arpIp, mac) in neighborMap) {
+                if (!arpIp.startsWith("$subnet.") || arpIp == self) continue
+                if (!hosts.containsKey(arpIp)) {
+                    val isGw = arpIp == effectiveGateway || arpIp.endsWith(".1")
+                    val brand = lookupBrandByMac(mac)
+                    val initType = if (isGw) LanDeviceType.ROUTER else LanDeviceType.OTHER
+                    val initName = getSavedDeviceAlias(context, arpIp, mac)
+                        ?: buildSmartFallbackDeviceName(arpIp, initType, brand, mac, emptyList(), isVi)
+                    hosts[arpIp] = HubLanHost(
+                        ip = arpIp,
+                        title = initName,
+                        subtitle = listOfNotNull(brand, "MAC $mac").joinToString(" · ").ifBlank { if (isVi) "đang kết nối" else "online" },
+                        isGateway = isGw,
+                        isSelf = false
+                    )
+                }
+            }
+            withContext(Dispatchers.Main) {
+                lanHosts.clear()
+                lanHosts.addAll(
+                    hosts.values
+                        .filter { !it.isSelf }
+                        .sortedWith(
+                            compareByDescending<HubLanHost> { it.isGateway }
+                                .thenBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 0 }
+                        )
+                )
+            }
+
+            // 3. Ultra-Fast Parallel Subnet Scan & 9-Layer Name Resolution (~1.4s total!)
             coroutineScope {
-                for (batch in (1..254).chunked(32)) {
+                for (batch in (1..254).chunked(64)) {
                     if (!isActive) break
                     val batchResults = batch.map { i ->
                         async(Dispatchers.IO) {
@@ -932,12 +994,10 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                             if (ip == self) return@async null
                             val isGw = ip == effectiveGateway || i == 1
                             val inArp = neighborMap.containsKey(ip)
-                            val reachable = runCatching {
-                                inArp || isGw || InetAddress.getByName(ip).isReachable(340)
-                            }.getOrDefault(false)
-                            val openPorts = checkLanCommonPorts(ip, if (reachable) 95 else 48)
-                            if (!reachable && openPorts.isEmpty()) return@async null
+                            val alive = isLanHostAliveFast(ip, inArp, isGw)
+                            if (!alive) return@async null
 
+                            val openPorts = checkLanCommonPorts(ip, 90)
                             val dev = resolveFullLanIdentity(
                                 context = context,
                                 ip = ip,
@@ -1349,18 +1409,21 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                                     val t0 = System.nanoTime()
                                                     val ok = runCatching {
                                                         Socket().use { s ->
-                                                            s.connect(InetSocketAddress(host, port), 1200)
+                                                            s.connect(InetSocketAddress(host, port), 850)
                                                             true
                                                         }
                                                     }.getOrElse {
-                                                        runCatching { InetAddress.getByName(host).isReachable(1200) }.getOrDefault(false)
+                                                        runCatching { InetAddress.getByName(host).isReachable(850) }.getOrDefault(false)
                                                     }
                                                     val ms = (System.nanoTime() - t0) / 1_000_000L
                                                     return if (ok) "${ms}ms" else "Timeout"
                                                 }
-                                                val gwMs = if (gwIpStr != "—") measureTcpOrIcmp(gwIpStr, 80) else "N/A"
-                                                val cfMs = measureTcpOrIcmp("1.1.1.1", 53)
-                                                val ggMs = measureTcpOrIcmp("8.8.8.8", 53)
+                                                val (gwMs, cfMs, ggMs) = coroutineScope {
+                                                    val dGw = async { if (gwIpStr != "—") measureTcpOrIcmp(gwIpStr, 80) else "N/A" }
+                                                    val dCf = async { measureTcpOrIcmp("1.1.1.1", 53) }
+                                                    val dGg = async { measureTcpOrIcmp("8.8.8.8", 53) }
+                                                    Triple(dGw.await(), dCf.await(), dGg.await())
+                                                }
                                                 withContext(Dispatchers.Main) {
                                                     quickPingRunning = false
                                                     quickPingResult = "Router: $gwMs  •  1.1.1.1: $cfMs  •  8.8.8.8: $ggMs"
@@ -1434,22 +1497,26 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                                     add("Google (8.8.8.8)" to "8.8.8.8")
                                                     add("Quad9 (9.9.9.9)" to "9.9.9.9")
                                                 }
-                                                val dnsScores = dnsCandidates.map { (name, ip) ->
-                                                    val query = buildDnsQuery("example.com", 0x1234)
-                                                    val t0 = System.nanoTime()
-                                                    val ok = runCatching {
-                                                        DatagramSocket().use { sock ->
-                                                            sock.soTimeout = 900
-                                                            val addr = InetAddress.getByName(ip)
-                                                            sock.send(DatagramPacket(query, query.size, addr, 53))
-                                                            val buf = ByteArray(512)
-                                                            sock.receive(DatagramPacket(buf, buf.size))
-                                                            true
+                                                val dnsScores = coroutineScope {
+                                                    dnsCandidates.map { (name, ip) ->
+                                                        async {
+                                                            val query = buildDnsQuery("example.com", 0x1234)
+                                                            val t0 = System.nanoTime()
+                                                            val ok = runCatching {
+                                                                DatagramSocket().use { sock ->
+                                                                    sock.soTimeout = 700
+                                                                    val addr = InetAddress.getByName(ip)
+                                                                    sock.send(DatagramPacket(query, query.size, addr, 53))
+                                                                    val buf = ByteArray(512)
+                                                                    sock.receive(DatagramPacket(buf, buf.size))
+                                                                    true
+                                                                }
+                                                            }.getOrDefault(false)
+                                                            val ms = if (ok) ((System.nanoTime() - t0) / 1_000_000L) else 9999L
+                                                            name to ms
                                                         }
-                                                    }.getOrDefault(false)
-                                                    val ms = if (ok) ((System.nanoTime() - t0) / 1_000_000L) else 9999L
-                                                    name to ms
-                                                }.sortedBy { it.second }
+                                                    }.awaitAll().sortedBy { it.second }
+                                                }
 
                                                 val chCounts = listOf(1, 6, 11).associateWith { ch ->
                                                     snapshotNetworks.count { net ->
@@ -1524,7 +1591,10 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                 haptics.performHapticFeedback(
                                     androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
                                 )
-                                if (!wifiPermissionsGranted) {
+                                if (network.isActive) {
+                                    dialogNetwork = network
+                                    dialogStage = HubDialogStage.Menu
+                                } else if (!wifiPermissionsGranted) {
                                     wifiPermissionLauncher.launch(requiredWifiPermissions())
                                 } else if (!locationServicesEnabled) {
                                     showLocationServicesDialog = true

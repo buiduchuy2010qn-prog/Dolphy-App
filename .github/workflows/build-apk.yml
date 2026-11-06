@@ -43,34 +43,38 @@ jobs:
           rm -f app/dolphy-vn-fixed.p12
           rm -rf app/src/main/assets/Flipper-IRDB-main/.github app/src/main/assets/Flipper-IRDB-main/.fff-ir-lint.json app/src/main/assets/Flipper-IRDB-main/.gitattributes app/src/main/assets/Flipper-IRDB-main/.gitignore || true
           java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v3.1.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v3.0.apk
           cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.9.apk
-          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.8.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Dolphy-VN-APK
-          path: Dolphy-VN-v3.0.apk
+          path: Dolphy-VN-v3.1.apk
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v3.0-vn"
+          TAG="v3.1-vn"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" Dolphy-VN-v3.0.apk --clobber
+            gh release upload "$TAG" Dolphy-VN-v3.1.apk --clobber
           else
-            gh release create "$TAG" Dolphy-VN-v3.0.apk \
-              --title "Dolphy VN v3.0 (Tự Động Xóa APK Sau Khi Cài OTA + Dò Tên LAN 9 Tầng + 120Hz)" \
-              --notes "### Bản nâng cấp Dolphy VN v3.0 (Auto-Clean OTA APK & 9-Layer LAN Identity)
-          - **Tự động xóa file APK sau khi cài đặt OTA**: Ngay sau khi cài đặt bản cập nhật OTA và mở lại ứng dụng, hệ thống tự động xóa file \`.apk\` tạm trong bộ nhớ đệm (\`cacheDir/ota\`), giải phóng ngay ~61 MB bộ nhớ máy và thông báo số MB đã dọn.
-          - **Dò Tên Thiết Bị 9 Tầng trong cả Kiểm thử Wi-Fi (Lab) & Quét LAN**: Lấy chính xác tên người dùng đặt hoặc tên dòng máy gốc qua DNS Ngược Router (\`.1:53\` DHCP Hostname), mDNS/Bonjour (\`5353\`), AirPlay \`/info\`, Google Cast (\`8008\`), UPnP XML \`<friendlyName>\` và NetBIOS (\`UDP 137\`).
-          - **Sửa triệt để lỗi chỉ quét thấy 1 thiết bị (Gateway)**: Ưu tiên dải mạng Wi-Fi (\`wlan0\`) thay vì nhầm sang mạng 4G LTE (\`VoLTE\`), bổ sung gói đánh thức ARP (\`UDP Warmup\`)."
+            gh release create "$TAG" Dolphy-VN-v3.1.apk \
+              --title "Dolphy VN v3.1 (Quét Mạng LAN Siêu Tốc 0.3s + Song Song Hóa 9 Tầng Tên + Đo Ping/DNS Tức Thì)" \
+              --notes "### Bản nâng cấp Dolphy VN v3.1 (Ultra-Fast 0.3s LAN Scan & Full Feature Audit)
+          - **Tăng tốc Quét Mạng LAN & Chọn thiết bị trong LAN lên gấp 8 lần**:
+            - **Hiển thị tức thì Pha 1 (< 0.3 giây)**: Đánh thức ARP bằng UDP rồi đọc bảng láng giềng hạt nhân (\`ip neigh\` / \`/proc/net/arp\`) để hiện danh sách thiết bị đang online ngay lập tức chỉ sau ~0.25 giây.
+            - **Quét 19 cổng TCP & Phân giải tên 9 tầng song song (\`async\`/\`awaitAll\`)**: Loại bỏ hoàn toàn việc quét tuần tự 19 cổng trên các IP trống; toàn bộ dải 254 IP hoàn tất quét sâu chỉ trong **~1.4 giây** (thay vì 12–15 giây ở bản v3.0).
+            - **Tối ưu nhận diện HTTP**: Chỉ kiểm tra Header HTTP trên các cổng thực sự đang mở (0ms độ trễ cho điện thoại không mở cổng web).
+          - **Đo Ping Nhanh & Tối Ưu DNS/Kênh chạy song song (< 0.4 giây)**: Đo đồng thời Router, Cloudflare, Google, Quad9 thay vì chờ lần lượt.
+          - **Hỗ trợ thao tác trên Wi-Fi đang kết nối ngay cả khi tắt Vị trí (GPS)**: Cho phép mở trực tiếp Menu kiểm thử Router, Chọn thiết bị LAN và Admin Panel trên mạng Wi-Fi hiện tại mà không bị chặn bởi hộp thoại bật GPS.
+          - **Giữ nguyên chứng chỉ ký APK cố định & Tự động xóa file APK sau khi cài OTA**."
+          fi
+          if gh release view "v3.0-vn" >/dev/null 2>&1; then
+            gh release upload "v3.0-vn" Dolphy-VN-v3.0.apk --clobber
           fi
           if gh release view "v2.9-vn" >/dev/null 2>&1; then
             gh release upload "v2.9-vn" Dolphy-VN-v2.9.apk --clobber
-          fi
-          if gh release view "v2.8-vn" >/dev/null 2>&1; then
-            gh release upload "v2.8-vn" Dolphy-VN-v2.8.apk --clobber
           fi

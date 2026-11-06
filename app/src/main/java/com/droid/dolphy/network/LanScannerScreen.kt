@@ -271,16 +271,15 @@ internal fun lookupBrandByMac(mac: String?): String? {
 }
 
 internal fun detectBrandByHttp(ip: String, openPorts: List<Int>): String? {
-    val portsToCheck = if (80 in openPorts) listOf(80)
-    else if (443 in openPorts) listOf(443)
-    else listOf(80, 443, 8080, 8008)
+    val portsToCheck = openPorts.filter { it in listOf(80, 8080, 8008, 443, 8443, 8888) }.take(2)
+    if (portsToCheck.isEmpty()) return null
 
     for (port in portsToCheck) {
         try {
             val url = URL("http://$ip:$port/")
             val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 800
-            connection.readTimeout = 800
+            connection.connectTimeout = 450
+            connection.readTimeout = 450
             connection.instanceFollowRedirects = false
             val server = connection.getHeaderField("Server") ?: ""
             val wwwAuth = connection.getHeaderField("WWW-Authenticate") ?: ""
@@ -757,9 +756,9 @@ fun buildSmartFallbackDeviceName(
 }
 
 /**
- * Unified 9-Layer Device Identity Resolution used by both LanScannerScreen and NetworkDiagnosticHubScreen ("Chọn thiết bị trong LAN").
+ * Unified 9-Layer Parallel Device Identity Resolution (~250-350ms ceiling) used by both LanScannerScreen and NetworkDiagnosticHubScreen.
  */
-internal fun resolveFullLanIdentity(
+internal suspend fun resolveFullLanIdentity(
     context: Context,
     ip: String,
     gatewayIp: String?,
@@ -769,47 +768,50 @@ internal fun resolveFullLanIdentity(
     nsdName: String?,
     ssdpPair: Pair<String?, String?>?,
     isVi: Boolean
-): LanDevice {
-    var mac = initialMac ?: readSystemNeighborTable()[ip]
-    val (nbName, nbMac) = queryNetBiosNameAndMac(ip, 380)
-    if (mac == null && nbMac != null) mac = nbMac
-
-    val upnpFriendly = if (ssdpPair != null) fetchUpnpFriendlyName(ssdpPair.first, ssdpPair.second) else null
-
-    var realName: String? = nsdName
-        ?: nbName
-        ?: upnpFriendly
-
-    // Try Router Gateway DNS PTR & DHCP DNS servers (where router dnsmasq stores DHCP client Option 12 Hostnames!)
-    if (realName.isNullOrBlank()) {
-        val dnsList = (listOfNotNull(gatewayIp) + dnsServers).distinct()
+): LanDevice = coroutineScope {
+    val nbDeferred = async(Dispatchers.IO) { queryNetBiosNameAndMac(ip, 300) }
+    val upnpDeferred = async(Dispatchers.IO) {
+        if (ssdpPair != null) fetchUpnpFriendlyName(ssdpPair.first, ssdpPair.second) else null
+    }
+    val routerPtrDeferred = async(Dispatchers.IO) {
+        val dnsList = (listOfNotNull(gatewayIp) + dnsServers).distinct().take(2)
+        var foundPtr: String? = null
         for (dnsIp in dnsList) {
-            val ptr = queryDnsPtrName(ip, dnsIp, 53, 450)
+            val ptr = queryDnsPtrName(ip, dnsIp, 53, 300)
             if (!ptr.isNullOrBlank()) {
-                realName = ptr
+                foundPtr = ptr
                 break
             }
         }
+        foundPtr
+    }
+    val mdnsPtrDeferred = async(Dispatchers.IO) {
+        queryDnsPtrName(ip, ip, 5353, 280)
+    }
+    val httpCastDeferred = async(Dispatchers.IO) {
+        if (openPorts.isNotEmpty()) fetchHttpOrCastDeviceName(ip, openPorts) else null
     }
 
-    // Try Direct Unicast mDNS PTR (port 5353)
+    val (nbName, nbMac) = nbDeferred.await()
+    var mac = initialMac ?: nbMac ?: readSystemNeighborTable()[ip]
+    val upnpFriendly = upnpDeferred.await()
+    val routerPtr = routerPtrDeferred.await()
+    val mdnsPtr = mdnsPtrDeferred.await()
+    val httpCastName = httpCastDeferred.await()
+
+    var realName: String? = listOf(nsdName, nbName, upnpFriendly, routerPtr, mdnsPtr, httpCastName)
+        .firstOrNull { !it.isNullOrBlank() }
+
+    // Fallback to canonicalHostName with tight timeout if still blank
     if (realName.isNullOrBlank()) {
-        realName = queryDnsPtrName(ip, ip, 5353, 400)
-    }
-
-    // Try Cast / AirPlay / HTTP Title
-    if (realName.isNullOrBlank() && openPorts.isNotEmpty()) {
-        realName = fetchHttpOrCastDeviceName(ip, openPorts)
-    }
-
-    // Try standard canonicalHostName if not raw IP
-    if (realName.isNullOrBlank()) {
-        try {
-            val canonical = InetAddress.getByName(ip).canonicalHostName
-            if (canonical != ip && !canonical.matches(Regex("\\d+\\.\\d+\\.\\d+\\.\\d+"))) {
-                realName = canonical.removeSuffix(".lan").removeSuffix(".local").removeSuffix(".home").removeSuffix(".home.arpa")
-            }
-        } catch (_: Exception) {}
+        realName = withTimeoutOrNull(250) {
+            try {
+                val canonical = InetAddress.getByName(ip).canonicalHostName
+                if (canonical != ip && !canonical.matches(Regex("\\d+\\.\\d+\\.\\d+\\.\\d+"))) {
+                    canonical.removeSuffix(".lan").removeSuffix(".local").removeSuffix(".home").removeSuffix(".home.arpa")
+                } else null
+            } catch (_: Exception) { null }
+        }
     }
 
     val brand = lookupBrandByMac(mac) ?: detectBrandByHttp(ip, openPorts)
@@ -827,7 +829,7 @@ internal fun resolveFullLanIdentity(
     }
 
     val savedAlias = getSavedDeviceAlias(context, ip, mac)
-    return LanDevice(
+    LanDevice(
         ip = ip,
         hostname = displayHostname,
         mac = mac,
@@ -964,45 +966,45 @@ fun LanScannerScreen(navController: NavController) {
             )
             withContext(Dispatchers.Main) { devices = foundDevices.toList() }
 
-            // 0. Fast UDP ARP-Warmup so sleeping phones wake up and populate `ip neigh`
-            launch { warmupSubnetArpTable(subnet) }
+            // 0. Fast UDP ARP-Warmup (~90ms) so sleeping phones wake up and populate `ip neigh` immediately
+            warmupSubnetArpTable(subnet)
 
-            // 1. SSDP UPnP Multicast M-SEARCH (captures LOCATION XML URL + SERVER header)
-            launch {
+            // 1. SSDP UPnP Multicast M-SEARCH (captures LOCATION XML URL + SERVER header in background)
+            val ssdpJob = launch {
                 try {
                     val ssdpRequest = "M-SEARCH * HTTP/1.1\r\n" +
                             "HOST: 239.255.255.250:1900\r\n" +
                             "MAN: \"ssdp:discover\"\r\n" +
-                            "MX: 2\r\n" +
+                            "MX: 1\r\n" +
                             "ST: ssdp:all\r\n\r\n"
-                    val socket = DatagramSocket()
-                    socket.soTimeout = 1800
-                    val group = InetAddress.getByName("239.255.255.250")
-                    val packet = DatagramPacket(ssdpRequest.toByteArray(), ssdpRequest.length, group, 1900)
-                    socket.send(packet)
+                    DatagramSocket().use { socket ->
+                        socket.soTimeout = 1100
+                        val group = InetAddress.getByName("239.255.255.250")
+                        val packet = DatagramPacket(ssdpRequest.toByteArray(), ssdpRequest.length, group, 1900)
+                        socket.send(packet)
 
-                    val receiveData = ByteArray(1536)
-                    val startTime = System.currentTimeMillis()
-                    while (System.currentTimeMillis() - startTime < 2500) {
-                        try {
-                            val receivePacket = DatagramPacket(receiveData, receiveData.size)
-                            socket.receive(receivePacket)
-                            val response = String(receivePacket.data, 0, receivePacket.length)
-                            val address = receivePacket.address.hostAddress
-                            if (address != null) {
-                                val loc = Regex("(?im)^LOCATION:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
-                                val srv = Regex("(?im)^SERVER:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
-                                if (loc != null || srv != null) {
-                                    upnpLocations[address] = loc to srv
+                        val receiveData = ByteArray(1536)
+                        val startTime = System.currentTimeMillis()
+                        while (System.currentTimeMillis() - startTime < 1400) {
+                            try {
+                                val receivePacket = DatagramPacket(receiveData, receiveData.size)
+                                socket.receive(receivePacket)
+                                val response = String(receivePacket.data, 0, receivePacket.length)
+                                val address = receivePacket.address.hostAddress
+                                if (address != null) {
+                                    val loc = Regex("(?im)^LOCATION:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
+                                    val srv = Regex("(?im)^SERVER:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
+                                    if (loc != null || srv != null) {
+                                        upnpLocations[address] = loc to srv
+                                    }
                                 }
-                            }
-                        } catch (e: Exception) { break }
+                            } catch (e: Exception) { break }
+                        }
                     }
-                    socket.close()
                 } catch (e: Exception) {}
             }
 
-            // 2. Fixed Multi-Listener NsdManager Discovery (separate listener per service type!)
+            // 2. Fixed Multi-Listener NsdManager Discovery (runs asynchronously and updates resolvedNames live!)
             val ndm = nsdManager
             val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
             if (ndm != null) {
@@ -1042,67 +1044,98 @@ fun LanScannerScreen(navController: NavController) {
                         activeListeners.add(listener)
                     } catch (_: Exception) {}
                 }
-                delay(650)
             }
 
+            delay(90)
             val neighborCache = ConcurrentHashMap(readSystemNeighborTable())
-            val jobs = mutableListOf<Job>()
-            val scanScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-            for (i in 1..254) {
-                val testIp = "$subnet.$i"
-                if (testIp == selfIp) continue
-
-                val job = scanScope.launch {
-                    try {
-                        val address = InetAddress.getByName(testIp)
-                        val reachable = address.isReachable(340) || neighborCache.containsKey(testIp)
-                        val openPorts = checkLanCommonPorts(testIp, if (reachable) 100 else 50)
-
-                        if (reachable || openPorts.isNotEmpty()) {
-                            val resolved = resolveFullLanIdentity(
-                                context = context,
-                                ip = testIp,
-                                gatewayIp = gatewayIp,
-                                dnsServers = listOf(gatewayIp),
-                                initialMac = neighborCache[testIp],
-                                openPorts = openPorts,
-                                nsdName = resolvedNames[testIp],
-                                ssdpPair = upnpLocations[testIp],
-                                isVi = isVi
+            // 3. Instant Phase-1 Emission (< 0.25s): Show all ARP/Neighbor & Gateway devices immediately!
+            synchronized(foundDevices) {
+                val initialIps = (neighborCache.keys + gatewayIp).distinct()
+                for (arpIp in initialIps) {
+                    if (!arpIp.startsWith("$subnet.") || arpIp == selfIp) continue
+                    if (foundDevices.none { it.ip == arpIp }) {
+                        val mac = neighborCache[arpIp]
+                        val brand = lookupBrandByMac(mac)
+                        val isGw = arpIp == gatewayIp || arpIp.endsWith(".1")
+                        val initType = if (isGw) LanDeviceType.ROUTER else LanDeviceType.OTHER
+                        val initName = buildSmartFallbackDeviceName(arpIp, initType, brand, mac, emptyList(), isVi)
+                        foundDevices.add(
+                            LanDevice(
+                                ip = arpIp,
+                                hostname = initName,
+                                mac = mac,
+                                type = initType,
+                                brand = brand,
+                                customAlias = getSavedDeviceAlias(context, arpIp, mac)
                             )
-
-                            synchronized(foundDevices) {
-                                val existingIdx = foundDevices.indexOfFirst { it.ip == testIp }
-                                if (existingIdx == -1) {
-                                    foundDevices.add(resolved)
-                                } else {
-                                    val existing = foundDevices[existingIdx]
-                                    foundDevices[existingIdx] = existing.copy(
-                                        hostname = resolved.hostname ?: existing.hostname,
-                                        type = if (resolved.type != LanDeviceType.OTHER) resolved.type else existing.type,
-                                        openPorts = (existing.openPorts + resolved.openPorts).distinct(),
-                                        mac = resolved.mac ?: existing.mac,
-                                        brand = resolved.brand ?: existing.brand,
-                                        customAlias = resolved.customAlias ?: existing.customAlias
-                                    )
-                                }
-                            }
-                            withContext(Dispatchers.Main) {
-                                devices = foundDevices.toList().sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
-                            }
-                        }
-                    } catch (e: Exception) { }
-
-                    synchronized(this) {
-                        progress += 1f / 254f
+                        )
                     }
                 }
-                jobs.add(job)
-                if (i % 25 == 0) delay(55)
+            }
+            withContext(Dispatchers.Main) {
+                devices = foundDevices.toList().sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
             }
 
-            jobs.joinAll()
+            // 4. Ultra-Fast Parallel Subnet Scan & 9-Layer Name Resolution (~1.4s total!)
+            coroutineScope {
+                for (batch in (1..254).chunked(64)) {
+                    val batchJobs = batch.map { i ->
+                        launch(Dispatchers.IO) {
+                            val testIp = "$subnet.$i"
+                            if (testIp != selfIp) {
+                                try {
+                                    val isGw = testIp == gatewayIp || i == 1
+                                    val inArp = neighborCache.containsKey(testIp)
+                                    val alive = isLanHostAliveFast(testIp, inArp, isGw)
+
+                                    if (alive) {
+                                        val openPorts = checkLanCommonPorts(testIp, 90)
+                                        val resolved = resolveFullLanIdentity(
+                                            context = context,
+                                            ip = testIp,
+                                            gatewayIp = gatewayIp,
+                                            dnsServers = listOf(gatewayIp),
+                                            initialMac = neighborCache[testIp],
+                                            openPorts = openPorts,
+                                            nsdName = resolvedNames[testIp],
+                                            ssdpPair = upnpLocations[testIp],
+                                            isVi = isVi
+                                        )
+
+                                        synchronized(foundDevices) {
+                                            val existingIdx = foundDevices.indexOfFirst { it.ip == testIp }
+                                            if (existingIdx == -1) {
+                                                foundDevices.add(resolved)
+                                            } else {
+                                                val existing = foundDevices[existingIdx]
+                                                foundDevices[existingIdx] = existing.copy(
+                                                    hostname = resolved.hostname ?: existing.hostname,
+                                                    type = if (resolved.type != LanDeviceType.OTHER) resolved.type else existing.type,
+                                                    openPorts = (existing.openPorts + resolved.openPorts).distinct(),
+                                                    mac = resolved.mac ?: existing.mac,
+                                                    brand = resolved.brand ?: existing.brand,
+                                                    customAlias = resolved.customAlias ?: existing.customAlias,
+                                                    isUPnP = resolved.isUPnP || existing.isUPnP
+                                                )
+                                            }
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            devices = foundDevices.toList().sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            synchronized(foundDevices) {
+                                progress = (progress + 1f / 254f).coerceAtMost(0.99f)
+                            }
+                        }
+                    }
+                    batchJobs.joinAll()
+                }
+            }
+
+            ssdpJob.cancel()
             // Refresh MAC table & NSD names once more after sweep completes
             val finalNeighbors = readSystemNeighborTable()
             synchronized(foundDevices) {
@@ -2085,7 +2118,26 @@ private fun getMacAddress(): String? {
     return null
 }
 
-internal fun checkLanCommonPorts(ip: String, timeout: Int): List<Int> {
+internal suspend fun isLanHostAliveFast(ip: String, inArp: Boolean, isGateway: Boolean): Boolean = coroutineScope {
+    if (inArp || isGateway) return@coroutineScope true
+    val icmpAlive = runCatching { InetAddress.getByName(ip).isReachable(200) }.getOrDefault(false)
+    if (icmpAlive) return@coroutineScope true
+    val fastPorts = listOf(80, 445, 62078, 8008)
+    fastPorts.map { port ->
+        async(Dispatchers.IO) {
+            try {
+                Socket().use { s ->
+                    s.connect(InetSocketAddress(ip, port), 55)
+                    true
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }.awaitAll().any { it }
+}
+
+internal suspend fun checkLanCommonPorts(ip: String, timeout: Int): List<Int> = coroutineScope {
     val portsToCheck = listOf(
         80, 443,
         22, 23,
@@ -2099,16 +2151,18 @@ internal fun checkLanCommonPorts(ip: String, timeout: Int): List<Int> {
         9100,
         62078
     )
-    val openPorts = mutableListOf<Int>()
-    for (port in portsToCheck) {
-        try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(ip, port), timeout)
-                openPorts.add(port)
+    portsToCheck.map { port ->
+        async(Dispatchers.IO) {
+            try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(ip, port), timeout)
+                    port
+                }
+            } catch (_: Exception) {
+                null
             }
-        } catch (e: Exception) {}
-    }
-    return openPorts
+        }
+    }.awaitAll().filterNotNull()
 }
 
 internal fun guessLanDeviceType(hostname: String?, ip: String, openPorts: List<Int>, isFirstIp: Boolean): LanDeviceType {

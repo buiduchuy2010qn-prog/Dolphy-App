@@ -21,8 +21,8 @@ android {
         applicationId = "com.droid.dolphy"
         minSdk = 26
         targetSdk = 36
-        versionCode = 300 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
-        versionName = "3.0-VN"
+        versionCode = 310 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
+        versionName = "3.1-VN"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
