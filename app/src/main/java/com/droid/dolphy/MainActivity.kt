@@ -119,6 +119,7 @@ import com.droid.dolphy.tvcast.SmartTvCastScreen
 import com.droid.dolphy.update.OtaController
 import com.droid.dolphy.update.OtaState
 import com.droid.dolphy.update.OtaUpdateHost
+import com.droid.dolphy.update.WhatsNewDialog
 import com.droid.dolphy.ui.theme.ExpressiveShapes
 import com.droid.dolphy.ui.theme.buildAppTypography
 import com.droid.dolphy.ui.theme.buildExpressiveTypography
@@ -790,14 +791,26 @@ fun MainScreen(
     val currentVersion = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull()?.takeIf { !it.isNullOrBlank() } ?: "2.3"
+        }.getOrNull()?.takeIf { !it.isNullOrBlank() } ?: "2.8-VN"
+    }
+    val appLanguage by spamViewModel.appLanguage.collectAsState()
+    var showWhatsNew by remember { mutableStateOf(false) }
+
+    LaunchedEffect(lastSeenVersion, currentVersion) {
+        if (lastSeenVersion != currentVersion) {
+            showWhatsNew = true
+        }
     }
 
-
-    if (lastSeenVersion != currentVersion) {
-        LaunchedEffect(currentVersion) {
-            spamViewModel.completeWelcomeDialog()
-        }
+    if (showWhatsNew) {
+        WhatsNewDialog(
+            versionName = currentVersion,
+            isVi = appLanguage == "vi",
+            onDismiss = {
+                showWhatsNew = false
+                spamViewModel.completeWelcomeDialog()
+            }
+        )
     }
 
     NavHost(
@@ -3122,10 +3135,19 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     val launcherCloakMode by spamViewModel.launcherCloakMode.collectAsState()
     val appPinCode by spamViewModel.appPinCode.collectAsState()
     val otaState by OtaController.state.collectAsState()
+    var showWhatsNewDialog by remember { mutableStateOf(false) }
     var showAppRenameDialog by remember { mutableStateOf(false) }
     var appRenameInput by remember(customAppTitle) { mutableStateOf(customAppTitle) }
     var showPinSetupDialog by remember { mutableStateOf(false) }
     var pinInput by remember(appPinCode) { mutableStateOf(appPinCode) }
+
+    if (showWhatsNewDialog) {
+        WhatsNewDialog(
+            versionName = appVersion,
+            isVi = appLanguage == "vi",
+            onDismiss = { showWhatsNewDialog = false }
+        )
+    }
 
     if (showPinSetupDialog) {
         val isVi = appLanguage == "vi"
@@ -4012,6 +4034,16 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         contentPadding = 0.dp
                     ) {
                         Column {
+                            SettingsItem(onClick = { showWhatsNewDialog = true }) {
+                                Icon(Icons.Default.Info, null, tint = accentColor, modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    if (appLanguage == "vi") "Có gì mới / Giới thiệu" else "What's new",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             SettingsItem(onClick = { OtaController.check(context, manual = true) }) {
                                 Icon(Icons.Default.SystemUpdate, null, tint = accentColor, modifier = Modifier.size(24.dp))
                                 Spacer(Modifier.width(12.dp))
