@@ -67,6 +67,7 @@ fun OtherScreen(navController: NavController, spamViewModel: SpamViewModel) {
     val functionsTileSize by spamViewModel.functionsTileSize.collectAsState()
     val appStyleMode by spamViewModel.appStyleMode.collectAsState()
     val pinnedRoutes by spamViewModel.pinnedCardRoutes.collectAsState()
+    val customAppTitle by spamViewModel.customAppTitle.collectAsState()
 
     var menuExpandedKey by remember { mutableStateOf<String?>(null) }
     var infoDialogDestination by remember { mutableStateOf<FunctionDestination?>(null) }

@@ -26,23 +26,23 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Accept Android SDK Licenses
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build Debug & Release APKs
+      - name: Build Dolphy VN APK
         run: |
-          java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug assembleRelease --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.6-debug.apk
-          cp app/build/outputs/apk/release/app-release.apk Dolphy-VN-v2.6-release.apk
+          java -Xmx64m -Xms64m -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk Dolphy-VN-v2.6.apk
 
-      - name: Upload APK Artifacts
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Dolphy-VN-APKs
-          path: |
-            Dolphy-VN-v2.6-release.apk
-            Dolphy-VN-v2.6-debug.apk
+          name: Dolphy-VN-APK
+          path: Dolphy-VN-v2.6.apk
 
       - name: Publish GitHub Release
         env:
@@ -50,9 +50,9 @@ jobs:
         run: |
           TAG="v2.6-vn"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" Dolphy-VN-v2.6-release.apk Dolphy-VN-v2.6-debug.apk --clobber
+            gh release upload "$TAG" Dolphy-VN-v2.6.apk --clobber
           else
-            gh release create "$TAG" Dolphy-VN-v2.6-release.apk Dolphy-VN-v2.6-debug.apk \
+            gh release create "$TAG" Dolphy-VN-v2.6.apk \
               --title "Dolphy VN v2.6 (Tiếng Việt & English - Offline Safe)" \
               --notes "### Bản cập nhật Dolphy VN v2.6 (Custom Edition)
           - **Mặc định Tiếng Việt 100%**: Hỗ trợ chuyển đổi Tiếng Việt / Tiếng Anh / Tiếng Nga trong Cài đặt.

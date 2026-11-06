@@ -2963,27 +2963,38 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
 
     if (showAppRenameDialog) {
         val isVi = appLanguage == "vi"
-        ExpressiveDialog(
+        AlertDialog(
             onDismissRequest = { showAppRenameDialog = false },
-            title = if (isVi) "Đổi tên ứng dụng" else "Custom App Name",
-            text = if (isVi) "Nhập tên hiển thị tùy ý cho ứng dụng trên màn hình khởi động và trang chính:" else "Enter any custom display name for the app:",
-            confirmText = if (isVi) "Lưu tên" else "Save",
-            onConfirm = {
-                spamViewModel.setCustomAppTitle(appRenameInput)
-                showAppRenameDialog = false
+            title = { Text(if (isVi) "Đổi tên ứng dụng" else "Custom App Name") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(if (isVi) "Nhập tên hiển thị tùy ý cho ứng dụng trên màn hình khởi động và trang chính:" else "Enter any custom display name for the app:")
+                    OutlinedTextField(
+                        value = appRenameInput,
+                        onValueChange = { appRenameInput = it },
+                        singleLine = true,
+                        label = { Text(if (isVi) "Tên ứng dụng" else "App Name") },
+                        placeholder = { Text("Dolphy VN") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
-            dismissText = stringResource(R.string.action_cancel),
-            onDismiss = { showAppRenameDialog = false }
-        ) {
-            OutlinedTextField(
-                value = appRenameInput,
-                onValueChange = { appRenameInput = it },
-                singleLine = true,
-                label = { Text(if (isVi) "Tên ứng dụng" else "App Name") },
-                placeholder = { Text("Dolphy VN") },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        spamViewModel.setCustomAppTitle(appRenameInput)
+                        showAppRenameDialog = false
+                    }
+                ) {
+                    Text(if (isVi) "Lưu tên" else "Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAppRenameDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
