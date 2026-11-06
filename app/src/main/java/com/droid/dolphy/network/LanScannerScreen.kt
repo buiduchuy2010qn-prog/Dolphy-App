@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -44,6 +45,7 @@ import com.droid.dolphy.R
 import com.droid.dolphy.SectionTopBar
 import kotlinx.coroutines.*
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.FileReader
 import java.io.InputStreamReader
 import java.net.DatagramPacket
@@ -69,7 +71,8 @@ data class LanDevice(
     val openPorts: List<Int> = emptyList(),
     val serviceName: String? = null,
     val isUPnP: Boolean = false,
-    val brand: String? = null
+    val brand: String? = null,
+    val customAlias: String? = null
 )
 
 private val portServiceNames = mapOf(
@@ -244,14 +247,348 @@ private val ouiVendors = mapOf(
     "24:6F:28" to "Espressif (ESP32)", "30:AE:A4" to "Espressif (ESP32)",
     "A4:CF:12" to "Espressif (ESP32)", "B4:E6:2D" to "Espressif (ESP32)",
     "BC:DD:C2" to "Espressif (ESP8266)", "CC:50:E3" to "Espressif (ESP8266)",
-    "D8:F1:5B" to "Espressif", "ECFABC" to "Espressif",
+    "D8:F1:5B" to "Espressif", "EC:FA:BC" to "Espressif",
     "A4:2B:B0" to "TP-Link", "C0:25:E9" to "TP-Link", "50:C7:BF" to "TP-Link",
     "98:DA:C4" to "TP-Link", "B0:4E:26" to "TP-Link", "E8:DE:27" to "TP-Link",
     "78:44:76" to "ZTE / Viettel", "CC:7B:35" to "ZTE / Viettel", "34:4B:50" to "ZTE / Viettel",
     "A0:91:C8" to "VNPT iGate", "E4:4E:2D" to "VNPT iGate",
     "74:4D:28" to "MikroTik", "B8:69:F4" to "MikroTik", "CC:2D:E0" to "MikroTik",
-    "24:5A:4C" to "Ubiquiti", "78:8A:20" to "Ubiquiti", "FC:EC:DA" to "Ubiquiti"
+    "24:5A:4C" to "Ubiquiti", "78:8A:20" to "Ubiquiti", "FC:EC:DA" to "Ubiquiti",
+    "2C:FD:A1" to "OPPO / Realme", "94:D0:0D" to "OPPO / Realme", "E8:9E:B4" to "OPPO / Realme",
+    "38:A4:ED" to "Xiaomi", "64:09:80" to "Xiaomi", "7C:1D:D9" to "Xiaomi",
+    "BC:7F:7B" to "Samsung", "D0:C5:F3" to "Samsung", "E4:FA:ED" to "Samsung",
+    "DC:A6:32" to "Raspberry Pi", "B8:27:EB" to "Raspberry Pi", "E4:5F:01" to "Raspberry Pi"
 )
+
+fun isLocallyAdministeredMac(mac: String?): Boolean {
+    if (mac == null || mac.length < 2) return false
+    val secondChar = mac[1].uppercaseChar()
+    return secondChar == '2' || secondChar == '6' || secondChar == 'A' || secondChar == 'E'
+}
+
+fun getSavedDeviceAlias(context: Context, ip: String, mac: String?): String? {
+    val prefs = context.getSharedPreferences("dolphy_lan_device_aliases", Context.MODE_PRIVATE)
+    if (!mac.isNullOrBlank()) {
+        val byMac = prefs.getString("mac_${mac.uppercase(Locale.US)}", null)
+        if (!byMac.isNullOrBlank()) return byMac
+    }
+    val byIp = prefs.getString("ip_$ip", null)
+    return if (!byIp.isNullOrBlank()) byIp else null
+}
+
+fun saveDeviceAlias(context: Context, ip: String, mac: String?, alias: String) {
+    val prefs = context.getSharedPreferences("dolphy_lan_device_aliases", Context.MODE_PRIVATE)
+    val editor = prefs.edit()
+    val clean = alias.trim()
+    if (clean.isEmpty()) {
+        if (!mac.isNullOrBlank()) editor.remove("mac_${mac.uppercase(Locale.US)}")
+        editor.remove("ip_$ip")
+    } else {
+        if (!mac.isNullOrBlank()) editor.putString("mac_${mac.uppercase(Locale.US)}", clean)
+        editor.putString("ip_$ip", clean)
+    }
+    editor.apply()
+}
+
+/**
+ * Sends a standard DNS PTR reverse query (`d.c.b.a.in-addr.arpa`) to a specific DNS server (e.g., Router Gateway port 53 or mDNS port 5353).
+ * This bypasses Android's 8.8.8.8 / Private DNS so the home router's dnsmasq can return the real DHCP client hostname!
+ */
+fun queryDnsPtrName(targetIp: String, dnsServerIp: String, dnsPort: Int = 53, timeoutMs: Int = 420): String? {
+    val octets = targetIp.split(".")
+    if (octets.size != 4) return null
+    val ptrDomain = "${octets[3]}.${octets[2]}.${octets[1]}.${octets[0]}.in-addr.arpa"
+
+    return try {
+        val out = ByteArrayOutputStream()
+        // Transaction ID (0x1337), Flags: Standard query (0x0100), Questions: 1
+        out.write(byteArrayOf(0x13, 0x37, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+        for (label in ptrDomain.split(".")) {
+            val bytes = label.toByteArray(Charsets.US_ASCII)
+            out.write(bytes.size)
+            out.write(bytes)
+        }
+        out.write(0) // root null label
+        // Type PTR (0x000C), Class IN (0x0001)
+        out.write(byteArrayOf(0x00, 0x0C, 0x00, 0x01))
+        val queryBytes = out.toByteArray()
+
+        DatagramSocket().use { socket ->
+            socket.soTimeout = timeoutMs
+            val packet = DatagramPacket(queryBytes, queryBytes.size, InetAddress.getByName(dnsServerIp), dnsPort)
+            socket.send(packet)
+
+            val respBuf = ByteArray(512)
+            val respPacket = DatagramPacket(respBuf, respBuf.size)
+            socket.receive(respPacket)
+            parseDnsPtrResponse(respBuf, respPacket.length)
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun parseDnsPtrResponse(buf: ByteArray, length: Int): String? {
+    if (length < 12) return null
+    val anCount = ((buf[6].toInt() and 0xFF) shl 8) or (buf[7].toInt() and 0xFF)
+    if (anCount <= 0) return null
+
+    var pos = 12
+    // Skip Question QNAME
+    while (pos < length) {
+        val len = buf[pos].toInt() and 0xFF
+        if (len == 0) {
+            pos++
+            break
+        }
+        if ((len and 0xC0) == 0xC0) {
+            pos += 2
+            break
+        }
+        pos += 1 + len
+    }
+    pos += 4 // Skip QTYPE + QCLASS
+
+    for (i in 0 until anCount) {
+        if (pos >= length) break
+        // Skip Answer NAME
+        while (pos < length) {
+            val len = buf[pos].toInt() and 0xFF
+            if (len == 0) {
+                pos++
+                break
+            }
+            if ((len and 0xC0) == 0xC0) {
+                pos += 2
+                break
+            }
+            pos += 1 + len
+        }
+        if (pos + 10 > length) break
+        val rType = ((buf[pos].toInt() and 0xFF) shl 8) or (buf[pos + 1].toInt() and 0xFF)
+        val rdLength = ((buf[pos + 8].toInt() and 0xFF) shl 8) or (buf[pos + 9].toInt() and 0xFF)
+        pos += 10
+        if (rType == 12 && pos + rdLength <= length) { // PTR record
+            val rawName = readDnsDomainName(buf, pos, length)
+            if (!rawName.isNullOrBlank()) {
+                val cleaned = rawName
+                    .removeSuffix(".")
+                    .removeSuffix(".local")
+                    .removeSuffix(".lan")
+                    .removeSuffix(".home")
+                    .removeSuffix(".localdomain")
+                    .removeSuffix(".dhcp")
+                    .trim()
+                if (cleaned.isNotEmpty() && !cleaned.endsWith("in-addr.arpa", ignoreCase = true)) {
+                    return cleaned
+                }
+            }
+        }
+        pos += rdLength
+    }
+    return null
+}
+
+private fun readDnsDomainName(buf: ByteArray, startOffset: Int, maxLen: Int): String? {
+    val labels = mutableListOf<String>()
+    var pos = startOffset
+    var jumps = 0
+    while (pos < maxLen && jumps < 10) {
+        val len = buf[pos].toInt() and 0xFF
+        if (len == 0) break
+        if ((len and 0xC0) == 0xC0) {
+            if (pos + 1 >= maxLen) break
+            pos = ((len and 0x3F) shl 8) or (buf[pos + 1].toInt() and 0xFF)
+            jumps++
+            continue
+        }
+        if (pos + 1 + len > maxLen) break
+        labels.add(String(buf, pos + 1, len, Charsets.UTF_8))
+        pos += 1 + len
+    }
+    return if (labels.isEmpty()) null else labels.joinToString(".")
+}
+
+/**
+ * Queries NetBIOS Name Service (UDP port 137) Node Status (`*`).
+ * Returns Pair(ComputerName, HardwareMacAddress) — works on Windows, Laptops, Samba, NAS, and many Android TV / routers!
+ */
+fun queryNetBiosNameAndMac(ip: String, timeoutMs: Int = 420): Pair<String?, String?> {
+    val request = byteArrayOf(
+        0x82.toByte(), 0x28.toByte(), 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x20, 0x43, 0x4B, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+        0x41, 0x41, 0x41, 0x00, 0x00, 0x21, 0x00, 0x01
+    )
+    return try {
+        DatagramSocket().use { socket ->
+            socket.soTimeout = timeoutMs
+            val addr = InetAddress.getByName(ip)
+            socket.send(DatagramPacket(request, request.size, addr, 137))
+            val buf = ByteArray(512)
+            val resp = DatagramPacket(buf, buf.size)
+            socket.receive(resp)
+            if (resp.length < 57) return null to null
+            val numNames = buf[56].toInt() and 0xFF
+            var offset = 57
+            var foundName: String? = null
+            for (i in 0 until numNames) {
+                if (offset + 18 > resp.length) break
+                val rawName = String(buf, offset, 15, Charsets.US_ASCII)
+                    .replace(Regex("[^\\x20-\\x7E]"), "")
+                    .trim()
+                val nameType = buf[offset + 15].toInt() and 0xFF
+                val flags = buf[offset + 16].toInt() and 0xFF
+                val isGroup = (flags and 0x80) != 0
+                if (!isGroup && rawName.isNotEmpty() && !rawName.startsWith("__")) {
+                    if (nameType == 0x20 || nameType == 0x00) {
+                        foundName = rawName
+                        if (nameType == 0x00) break
+                    }
+                }
+                offset += 18
+            }
+            // Right after the name table (57 + numNames * 18) is the 6-byte Unit ID (Hardware MAC Address!)
+            val macOffset = 57 + numNames * 18
+            var nbMac: String? = null
+            if (macOffset + 6 <= resp.length) {
+                val candidate = (0 until 6).joinToString(":") { idx ->
+                    String.format(Locale.US, "%02X", buf[macOffset + idx].toInt() and 0xFF)
+                }
+                if (candidate != "00:00:00:00:00:00" && candidate != "FF:FF:FF:FF:FF:FF") {
+                    nbMac = candidate
+                }
+            }
+            foundName to nbMac
+        }
+    } catch (_: Exception) {
+        null to null
+    }
+}
+
+/**
+ * Fetches UPnP XML description from SSDP LOCATION header and extracts <friendlyName> & <modelName>.
+ */
+fun fetchUpnpFriendlyName(locationUrl: String?, serverHeader: String?): String? {
+    if (!locationUrl.isNullOrBlank()) {
+        try {
+            val conn = URL(locationUrl.trim()).openConnection() as HttpURLConnection
+            conn.connectTimeout = 900
+            conn.readTimeout = 900
+            val xml = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val friendly = Regex("(?i)<friendlyName>([^<]+)</friendlyName>").find(xml)?.groupValues?.get(1)?.trim()
+            val model = Regex("(?i)<modelName>([^<]+)</modelName>").find(xml)?.groupValues?.get(1)?.trim()
+            if (!friendly.isNullOrBlank()) {
+                return if (!model.isNullOrBlank() && !friendly.contains(model, ignoreCase = true)) {
+                    "$friendly ($model)"
+                } else {
+                    friendly
+                }
+            }
+            if (!model.isNullOrBlank()) return model
+        } catch (_: Exception) {}
+    }
+    if (!serverHeader.isNullOrBlank()) {
+        val cleaned = serverHeader
+            .replace(Regex("(?i)UPnP/[0-9.]+"), "")
+            .replace(Regex("(?i)DLNADOC/[0-9.]+"), "")
+            .replace(Regex("(?i)Linux/[0-9.a-z_-]+"), "")
+            .trim()
+        if (cleaned.length in 3..42) return cleaned
+    }
+    return null
+}
+
+/**
+ * Fetches Google Cast / Android TV device name (`/setup/eureka_info`) or Web HTML `<title>`.
+ */
+fun fetchHttpOrCastDeviceName(ip: String, openPorts: List<Int>): String? {
+    // 1. Check Google Cast / Smart TV Eureka JSON on port 8008
+    if (8008 in openPorts) {
+        try {
+            val conn = URL("http://$ip:8008/setup/eureka_info").openConnection() as HttpURLConnection
+            conn.connectTimeout = 700
+            conn.readTimeout = 700
+            val json = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val castName = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1)?.trim()
+            if (!castName.isNullOrBlank()) return castName
+        } catch (_: Exception) {}
+    }
+
+    // 2. Check HTML <title> on HTTP ports
+    val webPorts = listOf(80, 8080, 8888).filter { it in openPorts }
+    for (p in webPorts) {
+        try {
+            val conn = URL("http://$ip:$p/").openConnection() as HttpURLConnection
+            conn.connectTimeout = 700
+            conn.readTimeout = 700
+            conn.instanceFollowRedirects = true
+            val html = conn.inputStream.bufferedReader().use { reader ->
+                val buf = CharArray(4096)
+                val read = reader.read(buf)
+                if (read > 0) String(buf, 0, read) else ""
+            }
+            conn.disconnect()
+            val title = Regex("(?i)<title[^>]*>([^<]+)</title>").find(html)?.groupValues?.get(1)
+                ?.replace(Regex("\\s+"), " ")
+                ?.trim()
+            if (!title.isNullOrBlank() &&
+                !title.equals("Index of /", ignoreCase = true) &&
+                !title.contains("404", ignoreCase = true) &&
+                !title.contains("403", ignoreCase = true) &&
+                !title.contains("Error", ignoreCase = true) &&
+                title.length in 2..48
+            ) {
+                return title
+            }
+        } catch (_: Exception) {}
+    }
+    return null
+}
+
+/**
+ * Builds a clear, human-readable fallback title when a device hides its hostname (so it never just shows a raw IP).
+ */
+fun buildSmartFallbackDeviceName(
+    ip: String,
+    type: LanDeviceType,
+    brand: String?,
+    mac: String?,
+    openPorts: List<Int>,
+    isVi: Boolean
+): String {
+    val lastOctet = ip.substringAfterLast(".")
+    val isGateway = ip.endsWith(".1")
+    if (isGateway || type == LanDeviceType.ROUTER) {
+        return if (!brand.isNullOrBlank()) {
+            if (isVi) "Router Wi-Fi Chính ($brand)" else "Main Wi-Fi Router ($brand)"
+        } else {
+            if (isVi) "Router Wi-Fi Chính (Gateway .1)" else "Main Wi-Fi Router (Gateway .1)"
+        }
+    }
+
+    if (62078 in openPorts || 7000 in openPorts) {
+        return if (isVi) "iPhone / iPad (${brand ?: "Apple"} • .$lastOctet)" else "iPhone / iPad (${brand ?: "Apple"} • .$lastOctet)"
+    }
+
+    val typeLabel = when (type) {
+        LanDeviceType.PC -> if (isVi) "Máy tính / Laptop" else "PC / Laptop"
+        LanDeviceType.PHONE -> if (isVi) "Điện thoại" else "Smartphone"
+        LanDeviceType.TV -> if (isVi) "Smart TV" else "Smart TV"
+        LanDeviceType.CAMERA -> if (isVi) "Camera IP" else "IP Camera"
+        LanDeviceType.PRINTER -> if (isVi) "Máy in mạng" else "Network Printer"
+        LanDeviceType.ROUTER -> if (isVi) "Thiết bị mạng / Mesh" else "Network Node"
+        LanDeviceType.OTHER -> if (isVi) "Điện thoại / Thiết bị Wi-Fi" else "Wi-Fi Device"
+    }
+
+    return when {
+        !brand.isNullOrBlank() -> "$typeLabel $brand (Máy .$lastOctet)"
+        isLocallyAdministeredMac(mac) -> if (isVi) "Điện thoại (MAC ẩn danh • Máy .$lastOctet)" else "Phone (Private MAC • .$lastOctet)"
+        else -> "$typeLabel (Máy số .$lastOctet)"
+    }
+}
 
 fun readSystemNeighborTable(): Map<String, String> {
     val result = LinkedHashMap<String, String>()
@@ -326,6 +663,7 @@ fun sendWakeOnLanMagicPacket(macAddress: String, subnetBroadcast: String = "255.
 @Composable
 fun LanScannerScreen(navController: NavController) {
     val context = LocalContext.current
+    val isVi = AppLocale.isVietnamese(context)
     val accent = MaterialTheme.colorScheme.primary
     val scope = rememberCoroutineScope()
 
@@ -337,7 +675,7 @@ fun LanScannerScreen(navController: NavController) {
 
     val nsdManager = remember { context.getSystemService(Context.NSD_SERVICE) as? NsdManager }
     val resolvedNames = remember { ConcurrentHashMap<String, String>() }
-    val upnpNames = remember { ConcurrentHashMap<String, String>() }
+    val upnpLocations = remember { ConcurrentHashMap<String, Pair<String?, String?>>() }
 
     val youLabel = stringResource(R.string.lan_scanner_you)
 
@@ -417,7 +755,7 @@ fun LanScannerScreen(navController: NavController) {
         progress = 0f
         devices = emptyList()
         resolvedNames.clear()
-        upnpNames.clear()
+        upnpLocations.clear()
 
         scope.launch(Dispatchers.IO) {
             val localIp = getLocalIpAddress()
@@ -428,12 +766,27 @@ fun LanScannerScreen(navController: NavController) {
 
             val selfIp = localIp.hostAddress
             val subnet = localIp.hostAddress.substringBeforeLast(".")
+            val gatewayIp = "$subnet.1"
             currentSubnet = "$subnet.*"
 
+            val selfModel = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}".trim()
+            val selfMac = getMacAddress()
+            val selfAlias = getSavedDeviceAlias(context, selfIp, selfMac)
             val foundDevices = mutableListOf<LanDevice>()
-            foundDevices.add(LanDevice(selfIp, youLabel, getMacAddress(), LanDeviceType.PHONE, true))
+            foundDevices.add(
+                LanDevice(
+                    ip = selfIp,
+                    hostname = "$selfModel ($youLabel)",
+                    mac = selfMac,
+                    type = LanDeviceType.PHONE,
+                    isSelf = true,
+                    brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
+                    customAlias = selfAlias
+                )
+            )
             withContext(Dispatchers.Main) { devices = foundDevices.toList() }
 
+            // 1. SSDP UPnP Multicast M-SEARCH (captures LOCATION XML URL + SERVER header)
             launch {
                 try {
                     val ssdpRequest = "M-SEARCH * HTTP/1.1\r\n" +
@@ -442,22 +795,24 @@ fun LanScannerScreen(navController: NavController) {
                             "MX: 2\r\n" +
                             "ST: ssdp:all\r\n\r\n"
                     val socket = DatagramSocket()
-                    socket.soTimeout = 2000
+                    socket.soTimeout = 1800
                     val group = InetAddress.getByName("239.255.255.250")
                     val packet = DatagramPacket(ssdpRequest.toByteArray(), ssdpRequest.length, group, 1900)
                     socket.send(packet)
 
-                    val receiveData = ByteArray(1024)
+                    val receiveData = ByteArray(1536)
                     val startTime = System.currentTimeMillis()
-                    while (System.currentTimeMillis() - startTime < 3000) {
+                    while (System.currentTimeMillis() - startTime < 2500) {
                         try {
                             val receivePacket = DatagramPacket(receiveData, receiveData.size)
                             socket.receive(receivePacket)
                             val response = String(receivePacket.data, 0, receivePacket.length)
                             val address = receivePacket.address.hostAddress
                             if (address != null) {
-                                if (response.contains("LOCATION:", ignoreCase = true)) {
-                                    upnpNames[address] = "UPnP Device"
+                                val loc = Regex("(?im)^LOCATION:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
+                                val srv = Regex("(?im)^SERVER:\\s*(.+)$").find(response)?.groupValues?.get(1)?.trim()
+                                if (loc != null || srv != null) {
+                                    upnpLocations[address] = loc to srv
                                 }
                             }
                         } catch (e: Exception) { break }
@@ -466,37 +821,47 @@ fun LanScannerScreen(navController: NavController) {
                 } catch (e: Exception) {}
             }
 
+            // 2. Fixed Multi-Listener NsdManager Discovery (separate listener per service type!)
             val ndm = nsdManager
-            val discoveryListener = if (ndm != null) {
-                object : NsdManager.DiscoveryListener {
-                    override fun onDiscoveryStarted(regType: String) {}
-                    override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                        ndm.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                            override fun onResolveFailed(si: NsdServiceInfo?, errorCode: Int) {}
-                            override fun onServiceResolved(si: NsdServiceInfo) {
-                                val host = si.host?.hostAddress
-                                if (host != null) resolvedNames[host] = si.serviceName
+            val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
+            if (ndm != null) {
+                val serviceTypes = listOf(
+                    "_http._tcp.",
+                    "_airplay._tcp.",
+                    "_googlecast._tcp.",
+                    "_companion-link._tcp.",
+                    "_smb._tcp.",
+                    "_printer._tcp.",
+                    "_adb._tcp."
+                )
+                for (svcType in serviceTypes) {
+                    try {
+                        val listener = object : NsdManager.DiscoveryListener {
+                            override fun onDiscoveryStarted(regType: String) {}
+                            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                                try {
+                                    ndm.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                                        override fun onResolveFailed(si: NsdServiceInfo?, errorCode: Int) {}
+                                        override fun onServiceResolved(si: NsdServiceInfo) {
+                                            val host = si.host?.hostAddress
+                                            val cleanSvcName = si.serviceName?.trim()
+                                            if (host != null && !cleanSvcName.isNullOrBlank()) {
+                                                resolvedNames[host] = cleanSvcName
+                                            }
+                                        }
+                                    })
+                                } catch (_: Exception) {}
                             }
-                        })
-                    }
-                    override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
-                    override fun onDiscoveryStopped(serviceType: String) {}
-                    override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
-                    override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                            override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
+                            override fun onDiscoveryStopped(serviceType: String) {}
+                            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                        }
+                        ndm.discoverServices(svcType, NsdManager.PROTOCOL_DNS_SD, listener)
+                        activeListeners.add(listener)
+                    } catch (_: Exception) {}
                 }
-            } else null
-
-            if (ndm != null && discoveryListener != null) {
-                try {
-                    ndm.discoverServices("_http._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_airplay._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_printer._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_googlecast._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_smb._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_apple-mobdev2._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    ndm.discoverServices("_adb._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-                    delay(1000)
-                } catch (e: Exception) {}
+                delay(650)
             }
 
             val neighborCache = ConcurrentHashMap(readSystemNeighborTable())
@@ -511,34 +876,67 @@ fun LanScannerScreen(navController: NavController) {
                     try {
                         val address = InetAddress.getByName(testIp)
                         val reachable = address.isReachable(320) || neighborCache.containsKey(testIp)
-                        val openPorts = checkCommonPorts(testIp, if (reachable) 110 else 55)
+                        val openPorts = checkCommonPorts(testIp, if (reachable) 100 else 50)
 
                         if (reachable || openPorts.isNotEmpty()) {
-                            var hostname = resolvedNames[testIp] ?: upnpNames[testIp]
-                            if (hostname == null) {
+                            // 7-Layer Real Device Name & MAC Resolution
+                            var mac = neighborCache[testIp] ?: getMacFromArp(testIp)
+                            val (nbName, nbMac) = queryNetBiosNameAndMac(testIp, 380)
+                            if (mac == null && nbMac != null) mac = nbMac
+
+                            val ssdpPair = upnpLocations[testIp]
+                            val upnpFriendly = if (ssdpPair != null) fetchUpnpFriendlyName(ssdpPair.first, ssdpPair.second) else null
+
+                            var realName: String? = resolvedNames[testIp]
+                                ?: nbName
+                                ?: upnpFriendly
+                                ?: queryDnsPtrName(testIp, gatewayIp, 53, 400)
+                                ?: queryDnsPtrName(testIp, testIp, 5353, 380)
+                                ?: fetchHttpOrCastDeviceName(testIp, openPorts)
+
+                            if (realName.isNullOrBlank()) {
                                 try {
                                     val canonical = address.canonicalHostName
-                                    if (canonical != testIp) hostname = canonical
-                                } catch (e: Exception) {}
+                                    if (canonical != testIp && !canonical.matches(Regex("\\d+\\.\\d+\\.\\d+\\.\\d+"))) {
+                                        realName = canonical.removeSuffix(".lan").removeSuffix(".local").removeSuffix(".home")
+                                    }
+                                } catch (_: Exception) {}
                             }
 
-                            val type = guessDeviceType(hostname, testIp, openPorts, i == 1)
-                            val isUpnp = upnpNames.containsKey(testIp)
-                            val mac = neighborCache[testIp] ?: getMacFromArp(testIp)
                             val brand = mac?.let { lookupBrand(it) } ?: detectBrandHttp(testIp, openPorts)
+                            val type = guessDeviceType(realName ?: brand, testIp, openPorts, i == 1)
+                            val displayHostname = if (!realName.isNullOrBlank()) {
+                                realName
+                            } else {
+                                buildSmartFallbackDeviceName(testIp, type, brand, mac, openPorts, isVi)
+                            }
+                            val savedAlias = getSavedDeviceAlias(context, testIp, mac)
+                            val isUpnp = ssdpPair != null
 
                             synchronized(foundDevices) {
                                 val existingIdx = foundDevices.indexOfFirst { it.ip == testIp }
                                 if (existingIdx == -1) {
-                                    foundDevices.add(LanDevice(testIp, hostname, mac, type, openPorts = openPorts, isUPnP = isUpnp, brand = brand))
+                                    foundDevices.add(
+                                        LanDevice(
+                                            ip = testIp,
+                                            hostname = displayHostname,
+                                            mac = mac,
+                                            type = type,
+                                            openPorts = openPorts,
+                                            isUPnP = isUpnp,
+                                            brand = brand,
+                                            customAlias = savedAlias
+                                        )
+                                    )
                                 } else {
                                     val existing = foundDevices[existingIdx]
                                     foundDevices[existingIdx] = existing.copy(
-                                        hostname = hostname ?: existing.hostname,
+                                        hostname = displayHostname ?: existing.hostname,
                                         type = if (type != LanDeviceType.OTHER) type else existing.type,
                                         openPorts = (existing.openPorts + openPorts).distinct(),
                                         mac = mac ?: existing.mac,
-                                        brand = brand ?: existing.brand
+                                        brand = brand ?: existing.brand,
+                                        customAlias = savedAlias ?: existing.customAlias
                                     )
                                 }
                             }
@@ -553,23 +951,40 @@ fun LanScannerScreen(navController: NavController) {
                     }
                 }
                 jobs.add(job)
-                if (i % 25 == 0) delay(60)
+                if (i % 25 == 0) delay(55)
             }
 
             jobs.joinAll()
-            // Refresh MAC table once more after ping sweep populates ARP/neighbor table
+            // Refresh MAC table & NSD names once more after sweep completes
             val finalNeighbors = readSystemNeighborTable()
             synchronized(foundDevices) {
                 for (idx in foundDevices.indices) {
                     val d = foundDevices[idx]
+                    if (d.isSelf) continue
                     val mac = d.mac ?: finalNeighbors[d.ip]
                     val brand = d.brand ?: mac?.let { lookupBrand(it) }
-                    if (mac != d.mac || brand != d.brand) {
-                        foundDevices[idx] = d.copy(mac = mac, brand = brand)
+                    val lateNsdName = resolvedNames[d.ip]
+                    val updatedHostname = if (!lateNsdName.isNullOrBlank()) {
+                        lateNsdName
+                    } else if (d.hostname == null || d.hostname.contains("Máy số .") || d.hostname.contains("Device .")) {
+                        buildSmartFallbackDeviceName(d.ip, d.type, brand, mac, d.openPorts, isVi)
+                    } else {
+                        d.hostname
                     }
+                    val alias = d.customAlias ?: getSavedDeviceAlias(context, d.ip, mac)
+                    foundDevices[idx] = d.copy(
+                        mac = mac,
+                        brand = brand,
+                        hostname = updatedHostname,
+                        customAlias = alias
+                    )
                 }
             }
-            ndm?.let { d -> try { discoveryListener?.let { d.stopServiceDiscovery(it) } } catch (e: Exception) {} }
+            if (ndm != null) {
+                for (listener in activeListeners) {
+                    try { ndm.stopServiceDiscovery(listener) } catch (_: Exception) {}
+                }
+            }
 
             withContext(Dispatchers.Main) {
                 devices = foundDevices.toList().sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
@@ -669,7 +1084,7 @@ fun LanScannerScreen(navController: NavController) {
                                 color = accent
                             )
                             Text(
-                                text = if (AppLocale.isVietnamese(context)) "Chạm vào thiết bị để mở bảng công cụ" else "Tap a device for tools & details",
+                                text = if (isVi) "Chạm vào thiết bị để xem tên, đặt ghi chú & chặn trên Router" else "Tap a device to rename, inspect or block on Router",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -712,6 +1127,11 @@ private fun DeviceDetailDialog(
     var pingStatus by remember { mutableStateOf<String?>(null) }
     var isPinging by remember { mutableStateOf(false) }
     var isPortScanning by remember { mutableStateOf(false) }
+    var isProbingName by remember { mutableStateOf(false) }
+    var aliasInput by remember(device.ip, device.customAlias) { mutableStateOf(device.customAlias ?: "") }
+    var showRenameBox by remember { mutableStateOf(false) }
+
+    val gatewayIp = remember(device.ip) { "${device.ip.substringBeforeLast(".")}.1" }
 
     fun copyToClipboard(label: String, value: String) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -730,7 +1150,7 @@ private fun DeviceDetailDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
-                .heightIn(max = 680.dp),
+                .heightIn(max = 700.dp),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             tonalElevation = 8.dp
@@ -749,10 +1169,17 @@ private fun DeviceDetailDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = device.hostname ?: device.brand ?: device.ip,
+                            text = device.customAlias ?: device.hostname ?: device.brand ?: device.ip,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
+                        if (!device.customAlias.isNullOrBlank() && !device.hostname.isNullOrBlank()) {
+                            Text(
+                                text = if (isVi) "Tên gốc trên mạng: ${device.hostname}" else "Network Name: ${device.hostname}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Text(
                             text = buildString {
                                 append("IP: ${device.ip}")
@@ -761,20 +1188,98 @@ private fun DeviceDetailDialog(
                             style = MaterialTheme.typography.bodyMedium,
                             color = accent
                         )
-                        if (device.mac != null) {
-                            Text(
-                                text = "MAC: ${device.mac}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Text(
+                            text = if (device.mac != null) {
+                                "MAC: ${device.mac}" + if (isLocallyAdministeredMac(device.mac)) {
+                                    if (isVi) " (MAC ngẫu nhiên bảo mật)" else " (Randomized Private MAC)"
+                                } else ""
+                            } else {
+                                if (isVi) "MAC: Bị ẩn bởi bảo mật Android 10+ (Dùng IP .${device.ip.substringAfterLast(".")} trên Router)" else "MAC: Hidden by Android 10+ (Check IP on Router)"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = { showRenameBox = !showRenameBox }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Rename", tint = accent)
                     }
                     DolphyIconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = null)
                     }
                 }
 
-                // Quick Copy & Web buttons
+                // Custom Alias / Ghi chú tên thiết bị
+                if (showRenameBox) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = if (isVi) "✏️ Đặt tên ghi nhớ cho thiết bị này" else "✏️ Set Custom Device Name",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = accent,
+                                fontWeight = FontWeight.Bold
+                            )
+                            OutlinedTextField(
+                                value = aliasInput,
+                                onValueChange = { aliasInput = it },
+                                placeholder = {
+                                    Text(if (isVi) "VD: Điện thoại Mẹ, TV Phòng khách, Máy lạ..." else "e.g. Mom's Phone, Living Room TV...")
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val presets = if (isVi) {
+                                    listOf("📱 Người nhà", "📺 TV/Cam", "⚠️ Thiết bị lạ")
+                                } else {
+                                    listOf("📱 Family", "📺 TV/Cam", "⚠️ Unknown")
+                                }
+                                presets.forEach { preset ->
+                                    SuggestionChip(
+                                        onClick = { aliasInput = preset },
+                                        label = { Text(preset, fontSize = 11.sp) }
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        aliasInput = ""
+                                        saveDeviceAlias(context, device.ip, device.mac, "")
+                                        onDeviceUpdated(device.copy(customAlias = null))
+                                        showRenameBox = false
+                                    }
+                                ) {
+                                    Text(if (isVi) "Xóa tên" else "Clear")
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        saveDeviceAlias(context, device.ip, device.mac, aliasInput)
+                                        onDeviceUpdated(device.copy(customAlias = aliasInput.trim().ifEmpty { null }))
+                                        showRenameBox = false
+                                    }
+                                ) {
+                                    Text(if (isVi) "Lưu tên" else "Save")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Quick Copy, Deep Name Probe & Web buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -787,15 +1292,46 @@ private fun DeviceDetailDialog(
                         Spacer(Modifier.width(6.dp))
                         Text(if (isVi) "Chép IP" else "Copy IP", maxLines = 1)
                     }
-                    if (device.mac != null) {
-                        FilledTonalButton(
-                            onClick = { copyToClipboard("MAC", device.mac) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (isVi) "Chép MAC" else "Copy MAC", maxLines = 1)
-                        }
+                    FilledTonalButton(
+                        enabled = !isProbingName,
+                        onClick = {
+                            isProbingName = true
+                            scope.launch(Dispatchers.IO) {
+                                val (nbName, nbMac) = queryNetBiosNameAndMac(device.ip, 700)
+                                val routerPtr = queryDnsPtrName(device.ip, gatewayIp, 53, 700)
+                                val mdnsPtr = queryDnsPtrName(device.ip, device.ip, 5353, 700)
+                                val httpTitle = fetchHttpOrCastDeviceName(device.ip, device.openPorts)
+                                val newMac = device.mac ?: nbMac ?: readSystemNeighborTable()[device.ip]
+                                val foundName = nbName ?: routerPtr ?: mdnsPtr ?: httpTitle
+                                withContext(Dispatchers.Main) {
+                                    isProbingName = false
+                                    if (!foundName.isNullOrBlank() || newMac != device.mac) {
+                                        onDeviceUpdated(
+                                            device.copy(
+                                                hostname = foundName ?: device.hostname,
+                                                mac = newMac
+                                            )
+                                        )
+                                        Toast.makeText(
+                                            context,
+                                            if (isVi) "Đã cập nhật: ${foundName ?: device.hostname}" else "Updated: ${foundName ?: device.hostname}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            if (isVi) "Thiết bị ẩn tên máy chủ (Chế độ Riêng tư iOS/Android). Bấm biểu tượng ✏️ để đặt tên ghi nhớ!" else "Device hides hostname (Private Mode). Tap ✏️ to set a custom name!",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (isProbingName) (if (isVi) "Đang dò..." else "Probing...") else (if (isVi) "Dò Tên" else "Probe Name"), maxLines = 1)
                     }
                     FilledTonalButton(
                         onClick = {
@@ -941,6 +1477,61 @@ private fun DeviceDetailDialog(
                             color = accent,
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+                }
+
+                // Client Management / Block on Router Card (shown for any other device on Wi-Fi!)
+                if (!device.isSelf && !device.ip.endsWith(".1")) {
+                    Surface(
+                        color = Color(0xFFF44336).copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFFF44336).copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = if (isVi) "🚫 Quản lý / Chặn thiết bị này trên Router Wi-Fi" else "🚫 Manage / Block Device on Wi-Fi Router",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = Color(0xFFF44336),
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isVi) {
+                                    "Để ngắt kết nối (kích) thiết bị «${device.customAlias ?: device.hostname ?: device.ip}», hãy bấm nút bên dưới để tự động sao chép mã định danh (${device.mac ?: device.ip}) và mở trang Quản trị Router ($gatewayIp) -> mục Danh sách thiết bị / Chặn MAC (Blacklist)."
+                                } else {
+                                    "To disconnect or block '${device.customAlias ?: device.hostname ?: device.ip}', tap below to copy its identifier (${device.mac ?: device.ip}) and open Router Admin ($gatewayIp) -> MAC Filter / Device Control."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Button(
+                                onClick = {
+                                    val targetId = device.mac ?: device.ip
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("BlockDevice", targetId))
+                                    Toast.makeText(
+                                        context,
+                                        if (isVi) "Đã chép $targetId! Hãy dán vào mục Chặn MAC / Quản lý thiết bị trên Router." else "Copied $targetId! Paste into Router MAC Filter / Access Control.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://$gatewayIp")))
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Block, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = if (isVi) "Chép ${if (device.mac != null) "MAC" else "IP"} & Mở Router ($gatewayIp) để Chặn" else "Copy ${if (device.mac != null) "MAC" else "IP"} & Open Router to Block",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -1218,7 +1809,7 @@ private fun DeviceCard(
         LanDeviceType.CAMERA -> Icons.Default.Videocam to Color(0xFFF44336)
         LanDeviceType.PRINTER -> Icons.Default.Print to Color(0xFF9C27B0)
         LanDeviceType.ROUTER -> Icons.Default.Router to Color(0xFF607D8B)
-        LanDeviceType.OTHER -> Icons.Default.DevicesOther to Color(0xFF9E9E9E)
+        LanDeviceType.OTHER -> Icons.Default.PhoneIphone to Color(0xFF00BCD4)
     }
 
     MaterialCard(
@@ -1254,7 +1845,7 @@ private fun DeviceCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = device.hostname ?: device.brand ?: device.ip,
+                        text = device.customAlias ?: device.hostname ?: device.brand ?: device.ip,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -1274,21 +1865,38 @@ private fun DeviceCard(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                    } else if (device.ip.endsWith(".1") || device.type == LanDeviceType.ROUTER) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            color = Color(0xFF607D8B).copy(alpha = 0.18f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "ROUTER",
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF607D8B),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
 
                 Text(
                     text = buildString {
-                        append(device.ip)
-                        if (device.mac != null) append(" • ${device.mac}")
+                        append("IP: ${device.ip}")
+                        if (device.mac != null) append(" • MAC: ${device.mac}")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                if (device.brand != null) {
+                if (device.brand != null || !device.customAlias.isNullOrBlank()) {
                     Text(
-                        text = device.brand,
+                        text = listOfNotNull(
+                            device.brand,
+                            if (!device.customAlias.isNullOrBlank()) device.hostname else null
+                        ).joinToString(" • "),
                         style = MaterialTheme.typography.labelSmall,
                         color = iconColor,
                         fontWeight = FontWeight.SemiBold
@@ -1350,10 +1958,11 @@ private fun checkCommonPorts(ip: String, timeout: Int): List<Int> {
     val portsToCheck = listOf(
         80, 443,
         22, 23,
-        135, 445,
+        135, 139, 445,
         554, 8000,
         3389,
         5555,
+        7000,
         8008, 8009, 8080,
         8089,
         9100,
@@ -1377,21 +1986,22 @@ private fun guessDeviceType(hostname: String?, ip: String, openPorts: List<Int>,
 
     if (isFirstIp || (ports.contains(80) && ip.endsWith(".1")) || ports.contains(8089)) return LanDeviceType.ROUTER
 
-    if (ports.contains(445) || ports.contains(135) || ports.contains(3389) ||
+    if (ports.contains(445) || ports.contains(135) || ports.contains(139) || ports.contains(3389) ||
         h.contains("desktop") || h.contains("laptop") || h.contains("pc") || h.contains("macbook") || h.contains("win")) {
         return LanDeviceType.PC
     }
 
-    if (ports.contains(62078) || ports.contains(8008) || ports.contains(8009) || ports.contains(5555) ||
-        h.contains("android") || h.contains("phone") || h.contains("iphone") || h.contains("pixel") ||
-        h.contains("galaxy") || h.contains("huawei") || h.contains("xiaomi") || h.contains("samsung") ||
-        h.contains("oppo") || h.contains("vivo") || h.contains("realme")) {
-        return LanDeviceType.PHONE
-    }
-
-    if (h.contains("tv") || h.contains("smarttv") || h.contains("bravia") || h.contains("chromecast") ||
+    if (ports.contains(8008) || ports.contains(8009) || h.contains("tv") || h.contains("smarttv") ||
+        h.contains("bravia") || h.contains("chromecast") || h.contains("webos") || h.contains("tizen") ||
         h.contains("tcl") || h.contains("hisense") || h.contains("kodi") || h.contains("firestick")) {
         return LanDeviceType.TV
+    }
+
+    if (ports.contains(62078) || ports.contains(7000) || ports.contains(5555) ||
+        h.contains("android") || h.contains("phone") || h.contains("iphone") || h.contains("ipad") || h.contains("pixel") ||
+        h.contains("galaxy") || h.contains("huawei") || h.contains("xiaomi") || h.contains("redmi") || h.contains("poco") ||
+        h.contains("samsung") || h.contains("oppo") || h.contains("vivo") || h.contains("realme") || h.contains("apple")) {
+        return LanDeviceType.PHONE
     }
 
     if (ports.contains(554) || ports.contains(8000) || h.contains("camera") || h.contains("cam") ||
