@@ -116,6 +116,9 @@ import com.droid.dolphy.plugin.PluginRuntimeAccess
 import com.droid.dolphy.printer.WifiPrintScreen
 import com.droid.dolphy.qr.*
 import com.droid.dolphy.tvcast.SmartTvCastScreen
+import com.droid.dolphy.update.OtaController
+import com.droid.dolphy.update.OtaState
+import com.droid.dolphy.update.OtaUpdateHost
 import com.droid.dolphy.ui.theme.ExpressiveShapes
 import com.droid.dolphy.ui.theme.buildAppTypography
 import com.droid.dolphy.ui.theme.buildExpressiveTypography
@@ -633,7 +636,10 @@ class MainActivity : ComponentActivity() {
                         onUnlocked = { pinUnlocked = true }
                     )
                 } else {
-                    MainScreen(spamViewModel, dolphyViewModel, nfcViewModel, pendingNavRoute, pendingPluginUri)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        MainScreen(spamViewModel, dolphyViewModel, nfcViewModel, pendingNavRoute, pendingPluginUri)
+                        OtaUpdateHost(isVi = appLanguage == "vi")
+                    }
                 }
             }
         }
@@ -3115,6 +3121,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     val customAppTitle by spamViewModel.customAppTitle.collectAsState()
     val launcherCloakMode by spamViewModel.launcherCloakMode.collectAsState()
     val appPinCode by spamViewModel.appPinCode.collectAsState()
+    val otaState by OtaController.state.collectAsState()
     var showAppRenameDialog by remember { mutableStateOf(false) }
     var appRenameInput by remember(customAppTitle) { mutableStateOf(customAppTitle) }
     var showPinSetupDialog by remember { mutableStateOf(false) }
@@ -4005,6 +4012,28 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         contentPadding = 0.dp
                     ) {
                         Column {
+                            SettingsItem(onClick = { OtaController.check(context, manual = true) }) {
+                                Icon(Icons.Default.SystemUpdate, null, tint = accentColor, modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        if (appLanguage == "vi") "Kiểm tra cập nhật (OTA)" else "Check for updates (OTA)",
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    Text(
+                                        when (val s = otaState) {
+                                            is OtaState.Checking -> if (appLanguage == "vi") "Đang kiểm tra…" else "Checking…"
+                                            is OtaState.Downloading -> if (appLanguage == "vi") "Đang tải ${(s.progress * 100).toInt()}%" else "Downloading ${(s.progress * 100).toInt()}%"
+                                            is OtaState.Available -> if (appLanguage == "vi") "Có bản ${s.release.tag}" else "Update ${s.release.tag}"
+                                            is OtaState.ReadyToInstall -> if (appLanguage == "vi") "Sẵn sàng cài đặt" else "Ready to install"
+                                            else -> if (appLanguage == "vi") "Tự kiểm tra GitHub Releases" else "Checks GitHub Releases"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             SettingsItem(onClick = { uriHandler.openUri("https://github.com/buiduchuy2010qn-prog/Dolphy-App") }) {
                                 Icon(Icons.Default.Circle, null, tint = accentColor, modifier = Modifier.size(24.dp))
                                 Spacer(Modifier.width(12.dp))
